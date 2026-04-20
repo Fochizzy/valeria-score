@@ -1,0 +1,28 @@
+import { ImageSourcePropType } from 'react-native'
+
+export const cardImages: Record<string, ImageSourcePropType> = {
+  aguilar_the_gilded_knight: require('../assets/cards/aguilar_the_gilded_knight.png'),
+  cornelius_the_dreamer: require('../assets/cards/cornelius_the_dreamer.png'),
+  daniela_the_huntress: require('../assets/cards/daniela_the_huntress.png'),
+  drakkenstrike: require('../assets/cards/drakkenstrike.png'),
+  elsyn_saint_of_shadows: require('../assets/cards/elsyn_saint_of_shadows.png'),
+  elysium_the_allsmith: require('../assets/cards/elysium_the_allsmith.png'),
+  gurika_the_guardian: require('../assets/cards/gurika_the_guardian.png'),
+  high_priestess_marianna: require('../assets/cards/high_priestess_marianna.png'),
+  hrothgar_the_conqueror: require('../assets/cards/hrothgar_the_conqueror.png'),
+  isabella_the_righteous: require('../assets/cards/isabella_the_righteous.png'),
+  jeskala_the_joyous_knight: require('../assets/cards/jeskala_the_joyous_knight.png'),
+  karsten_the_wolf: require('../assets/cards/karsten_the_wolf.png'),
+  lekzandr_the_protector: require('../assets/cards/lekzandr_the_protector.png'),
+  mico_the_monster_slayer: require('../assets/cards/mico_the_monster_slayer.png'),
+  mulholland_the_brave: require('../assets/cards/mulholland_the_brave.png'),
+  node_master_of_swords: require('../assets/cards/node_master_of_swords.png'),
+  pascal_the_gray_hunter: require('../assets/cards/pascal_the_gray_hunter.png'),
+  reese_the_firebrand: require('../assets/cards/reese_the_firebrand.png'),
+  shem_the_north_sea_guardian: require('../assets/cards/shem_the_north_sea_guardian.png'),
+  simon_the_unclean: require('../assets/cards/simon_the_unclean.png'),
+  sir_gustavo_the_wrathborn: require('../assets/cards/sir_gustavo_the_wrathborn.png'),
+  sir_roberts_of_stoneblood: require('../assets/cards/sir_roberts_of_stoneblood.png'),
+  waryn_lord_of_rogues: require('../assets/cards/waryn_lord_of_rogues.png'),
+  waybright_the_wise: require('../assets/cards/waybright_the_wise.png'),
+}

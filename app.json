@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "Valeria Score",
+    "slug": "valeria-score",
+    "scheme": "valeriascore",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "plugins": [
+      "expo-router",
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "android": {
+      "package": "com.example.valeriascore"
+    },
+    "ios": {
+      "bundleIdentifier": "com.example.valeriascore"
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "65d3d590-35be-49f3-9faa-0440a3851d62"
+      }
+    }
+  }
+}
