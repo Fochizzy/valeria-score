@@ -1,21 +1,22 @@
 import { useMemo, useState } from 'react'
 import {
-  Alert,
-  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native'
 import { router } from 'expo-router'
+import { SafeAreaView } from 'react-native-safe-area-context'
+import OnboardingMasthead from '../components/OnboardingMasthead'
+import { Alert } from '../lib/themed-alert'
 import { normalizePlayerId, setMyPlayerId } from '../lib/profile'
 import { theme } from '../constants/theme'
+import { getOnboardingMastheadContent } from '../lib/onboarding-masthead'
 
-const logo = require('../assets/valeria_logo.jpeg')
+const masthead = getOnboardingMastheadContent('choose-player-id')
 
 export default function ChoosePlayerIdScreen() {
   const [value, setValue] = useState('')
@@ -49,17 +50,7 @@ export default function ChoosePlayerIdScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.content}>
-          <View style={styles.heroCard}>
-            <View style={styles.logoWrap}>
-              <Image source={logo} style={styles.logo} resizeMode="contain" />
-            </View>
-
-            <Text style={styles.kicker}>Public Identity</Text>
-            <Text style={styles.title}>Choose Player ID</Text>
-            <Text style={styles.subtitle}>
-              Other players will use this public ID to recognize you in shared games.
-            </Text>
-          </View>
+          <OnboardingMasthead {...masthead} />
 
           <View style={styles.formCard}>
             <Text style={styles.label}>Player ID</Text>
@@ -76,7 +67,9 @@ export default function ChoosePlayerIdScreen() {
             />
 
             <Text style={styles.helpText}>
-              Use letters, numbers, hyphen, or underscore.
+              Use letters, numbers, hyphen, or underscore. If you already played as a
+              guest, reuse that same Player ID and we&apos;ll link that guest profile to
+              this account.
             </Text>
 
             <View style={styles.previewCard}>
@@ -113,60 +106,16 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     justifyContent: 'center',
-    padding: 20,
+    padding: 16,
   },
-  heroCard: {
-    backgroundColor: theme.colors.surface,
+  formCard: {
+    marginTop: -18,
+    backgroundColor: theme.colors.surfaceAlt,
     borderRadius: theme.radius.xxl,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    padding: 20,
-    alignItems: 'center',
-    marginBottom: 14,
-    ...theme.shadow.glow,
-  },
-  logoWrap: {
-    width: 180,
-    height: 108,
-    borderRadius: 18,
-    backgroundColor: theme.colors.surfaceRaised,
-    borderWidth: 1,
-    borderColor: theme.colors.borderSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 8,
-    marginBottom: 14,
-  },
-  logo: {
-    width: 148,
-    height: 82,
-  },
-  kicker: {
-    color: theme.colors.primaryLight,
-    fontSize: 11,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-    letterSpacing: 1.1,
-    marginBottom: 6,
-  },
-  title: {
-    color: theme.colors.text,
-    fontSize: 28,
-    fontWeight: '900',
-    marginBottom: 8,
-  },
-  subtitle: {
-    color: theme.colors.textSecondary,
-    fontSize: 14,
-    lineHeight: 22,
-    textAlign: 'center',
-  },
-  formCard: {
-    backgroundColor: theme.colors.surfaceAlt,
-    borderRadius: theme.radius.xl,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
     padding: 16,
+    paddingTop: 32,
     ...theme.shadow.card,
   },
   label: {

@@ -3,17 +3,17 @@ import {
   ActivityIndicator,
   Image,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   View,
 } from 'react-native'
 import { router, useNavigation } from 'expo-router'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { ensureProfileRow, getMyProfile } from '../lib/profile'
 import { theme } from '../constants/theme'
 
-const logo = require('../assets/valeria_logo.jpeg')
+const logo = require('../assets/valeria_logo.png')
 
 export default function IndexScreen() {
   const navigation = useNavigation()
