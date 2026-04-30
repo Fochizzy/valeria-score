@@ -2,7 +2,8 @@ import type { DukeCard, StatKey } from '../data/cards'
 
 export type ScoreInputs = Record<StatKey, number>
 
-const DIVISION_KEYS = new Set<StatKey>(['gold', 'magic', 'fight'])
+const RESOURCE_DIVISION_KEYS: StatKey[] = ['gold', 'fight', 'magic']
+const DIVISION_KEYS = new Set<StatKey>(RESOURCE_DIVISION_KEYS)
 
 export const createEmptyInputs = (): ScoreInputs => ({
   gold: 0,
@@ -50,6 +51,52 @@ export function normalizeScoreInputs(
 
 export const isDivisionRule = (key: StatKey) => DIVISION_KEYS.has(key)
 
+export function getResourceModifier(card: DukeCard) {
+  return RESOURCE_DIVISION_KEYS.reduce((modifier, key) => {
+    if (modifier > 0) return modifier
+
+    const nextModifier = card.multipliers[key] ?? 0
+    return nextModifier > 0 ? nextModifier : modifier
+  }, 0)
+}
+
+export function calculateCombinedResourceTotal(
+  card: DukeCard,
+  inputs: ScoreInputs
+) {
+  const modifier = getResourceModifier(card)
+  if (modifier <= 0) return 0
+
+  const resourceInputTotal = RESOURCE_DIVISION_KEYS.reduce((sum, key) => {
+    if ((card.multipliers[key] ?? 0) <= 0) return sum
+    return sum + Math.max(0, inputs[key] ?? 0)
+  }, 0)
+
+  if (resourceInputTotal <= 0) return 0
+  return Math.floor(resourceInputTotal / modifier)
+}
+
+function calculateResourceLineTotals(card: DukeCard, inputs: ScoreInputs) {
+  const totals = new Map<StatKey, number>()
+  const modifier = getResourceModifier(card)
+  let runningInput = 0
+
+  RESOURCE_DIVISION_KEYS.forEach((key) => {
+    if (modifier <= 0 || (card.multipliers[key] ?? 0) <= 0) {
+      totals.set(key, 0)
+      return
+    }
+
+    const previousTotal = Math.floor(runningInput / modifier)
+    runningInput += Math.max(0, inputs[key] ?? 0)
+    const nextTotal = Math.floor(runningInput / modifier)
+
+    totals.set(key, Math.max(0, nextTotal - previousTotal))
+  })
+
+  return totals
+}
+
 export function calculateLineTotal(
   key: StatKey,
   multiplier: number,
@@ -61,6 +108,8 @@ export function calculateLineTotal(
 }
 
 export function calculateLineItems(card: DukeCard, inputs: ScoreInputs) {
+  const resourceLineTotals = calculateResourceLineTotals(card, inputs)
+
   return Object.entries(card.multipliers).map(([key, multiplier]) => {
     const typedKey = key as StatKey
     const input = inputs[typedKey] ?? 0
@@ -69,14 +118,30 @@ export function calculateLineItems(card: DukeCard, inputs: ScoreInputs) {
       key: typedKey,
       multiplier,
       input,
-      total: calculateLineTotal(typedKey, multiplier, input),
+      total: isDivisionRule(typedKey)
+        ? resourceLineTotals.get(typedKey) ?? 0
+        : calculateLineTotal(typedKey, multiplier, input),
       isDivision: isDivisionRule(typedKey),
     }
   })
 }
 
 export function calculateTotalScore(card: DukeCard, inputs: ScoreInputs) {
-  return calculateLineItems(card, inputs).reduce((sum, item) => sum + item.total, 0)
+  const nonResourceTotal = Object.entries(card.multipliers).reduce(
+    (sum, [key, multiplier]) => {
+      const typedKey = key as StatKey
+      if (isDivisionRule(typedKey)) return sum
+
+      return sum + calculateLineTotal(
+        typedKey,
+        multiplier,
+        inputs[typedKey] ?? 0
+      )
+    },
+    0
+  )
+
+  return calculateCombinedResourceTotal(card, inputs) + nonResourceTotal
 }
 
 export function getRuleText(key: StatKey, multiplier: number) {
