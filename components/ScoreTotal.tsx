@@ -8,12 +8,18 @@ import Animated, {
 import { useEffect } from 'react'
 import { theme } from '../constants/theme'
 
+type SavedState = 'saved' | 'unsaved' | 'locked'
+
 export function ScoreTotal({
   total,
-  subtitle,
+  savedState = 'unsaved',
+  savedAtLabel,
 }: {
   total: number
-  subtitle?: string
+  // Status line under the big number — see below.
+  savedState?: SavedState
+  // Optional explicit "Saved Apr 27" label for the saved state.
+  savedAtLabel?: string
 }) {
   const scale = useSharedValue(1)
 
@@ -22,17 +28,35 @@ export function ScoreTotal({
       withTiming(1.05, { duration: 120 }),
       withTiming(1, { duration: 120 })
     )
-  }, [total])
+  }, [scale, total])
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
   }))
 
+  // Status line replaces the previous duke-name subtitle. Reads like a row in
+  // a status bar: "0 pts · ⚠ unsaved" / "12 pts · ✓ saved" / "12 pts · 🔒 locked".
+  const statusGlyph =
+    savedState === 'saved' ? '✓' : savedState === 'locked' ? '🔒' : '⚠'
+  const statusLabel =
+    savedState === 'saved'
+      ? savedAtLabel ?? 'saved'
+      : savedState === 'locked'
+        ? 'locked'
+        : 'unsaved'
+
   return (
     <Animated.View style={[styles.card, animatedStyle]}>
       <Text style={styles.label}>Total Score</Text>
       <Text style={styles.total}>{total}</Text>
-      {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+      <View style={styles.statusRow}>
+        <Text style={styles.statusText}>
+          {total} {total === 1 ? 'pt' : 'pts'} ·{' '}
+          <Text style={styles.statusBadge}>
+            {statusGlyph} {statusLabel}
+          </Text>
+        </Text>
+      </View>
     </Animated.View>
   )
 }
@@ -45,7 +69,7 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.borderAccent ?? theme.colors.accent,
     padding: theme.spacing.lg,
     alignItems: 'center',
-    ...theme.shadow.glowStrong,
+    ...theme.shadow.glow,
   },
 
   label: {
@@ -64,11 +88,20 @@ const styles = StyleSheet.create({
     lineHeight: 46,
   },
 
-  subtitle: {
+  statusRow: {
+    marginTop: 6,
+    alignItems: 'center',
+  },
+
+  statusText: {
     color: theme.colors.textSecondary,
     fontSize: 12,
     fontWeight: '700',
-    marginTop: 4,
     textAlign: 'center',
+  },
+
+  statusBadge: {
+    color: '#FFFFFF',
+    fontWeight: '900',
   },
 })

@@ -2,22 +2,25 @@ import { Image, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { cards } from '../data/cards'
 import { cardImages } from '../data/cardImages'
 import { theme } from '../constants/theme'
+import ValeriaHeader from '../components/ValeriaHeader'
 
-const galleryCards = cards.filter((card) => card.slug !== 'duke_00' && card.slug !== '00_duke')
+const galleryCards = cards.filter(
+  (card) => card.slug !== 'duke_00' && card.slug !== '00_duke'
+)
 
 export default function GalleryScreen() {
   return (
     <ScrollView
       style={styles.container}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={{ padding: 10, paddingBottom: 24 }}
       showsVerticalScrollIndicator={false}
     >
-      <View style={styles.headerCard}>
-        <Text style={styles.title}>Duke Gallery</Text>
-        <Text style={styles.subtitle}>
-          Browse all duke cards in a clean gallery view.
-        </Text>
-      </View>
+      <ValeriaHeader
+        compact
+        showBack
+        title="Duke Gallery"
+        subtitle="Browse all dukes"
+      />
 
       <View style={styles.grid}>
         {galleryCards.map((card) => (
@@ -46,49 +49,21 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.background,
   },
 
-  content: {
-    padding: theme.spacing.lg,
-    paddingBottom: theme.spacing.xxxl ?? 40,
-  },
-
-  headerCard: {
-    backgroundColor: theme.colors.surfaceAlt,
-    borderRadius: theme.radius.xl ?? theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: theme.spacing.lg,
-    marginBottom: theme.spacing.lg,
-    ...theme.shadow.card,
-  },
-
-  title: {
-    color: theme.colors.text,
-    fontSize: 28,
-    fontWeight: '900',
-    marginBottom: 8,
-  },
-
-  subtitle: {
-    color: theme.colors.textMuted ?? '#B8A8D4',
-    fontSize: 14,
-    lineHeight: 22,
-    fontWeight: '700',
-  },
-
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
+    marginTop: 6,
   },
 
   card: {
     width: '48.5%',
     backgroundColor: theme.colors.surfaceAlt,
     borderRadius: theme.radius.lg,
-    padding: theme.spacing.sm,
+    padding: 8,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    marginBottom: theme.spacing.md,
+    marginBottom: 10,
     ...theme.shadow.card,
   },
 
@@ -98,7 +73,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.md,
     overflow: 'hidden',
     backgroundColor: theme.colors.backgroundAlt,
-    marginBottom: theme.spacing.sm,
+    marginBottom: 6,
   },
 
   image: {
@@ -111,6 +86,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     textAlign: 'center',
-    minHeight: 34,
+    minHeight: 32,
   },
 })

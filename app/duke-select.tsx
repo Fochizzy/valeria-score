@@ -9,12 +9,18 @@ import {
   View,
 } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import DukePicker from '../components/DukePicker'
+import CountBadge from '../components/CountBadge'
 import { cards } from '../data/cards'
 import { cardImages } from '../data/cardImages'
 import { theme } from '../constants/theme'
+import { filterDukesByQuery } from '../lib/duke-search'
+
+const logo = require('../assets/valeria_logo.png')
 
 export default function DukeSelectScreen() {
+  const insets = useSafeAreaInsets()
   const params = useLocalSearchParams<{
     sessionId?: string
     joinCode?: string
@@ -28,10 +34,7 @@ export default function DukeSelectScreen() {
   }, [])
 
   const filteredDukes = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return dukeCards
-
-    return dukeCards.filter((card) => card.name.toLowerCase().includes(q))
+    return filterDukesByQuery(dukeCards, query)
   }, [dukeCards, query])
 
   const selectedCard = useMemo(() => {
@@ -55,17 +58,28 @@ export default function DukeSelectScreen() {
   return (
     <ScrollView
       style={styles.screen}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[
+        styles.content,
+        {
+          paddingTop: insets.top + 12,
+          paddingBottom: insets.bottom + 24,
+        },
+      ]}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
     >
+      <View style={styles.heroCard}>
+        <View style={styles.logoWrap}>
+          <Image source={logo} style={styles.logo} resizeMode="contain" />
+        </View>
+        <Text style={styles.heroTitle}>Choose Duke</Text>
+      </View>
+
       {!selectedCard ? (
         <>
           <View style={styles.topBar}>
             <Text style={styles.title}>Dukes</Text>
-            <View style={styles.countPill}>
-              <Text style={styles.countPillText}>{filteredDukes.length}</Text>
-            </View>
+            <CountBadge value={filteredDukes.length} />
           </View>
 
           <View style={styles.searchCard}>
@@ -147,6 +161,55 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
   },
 
+  heroCard: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: theme.spacing.lg,
+    marginBottom: theme.spacing.md,
+    alignItems: 'center',
+    ...theme.shadow.card,
+  },
+
+  logoWrap: {
+    width: 180,
+    height: 68,
+    marginBottom: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  logo: {
+    width: '100%',
+    height: '100%',
+  },
+
+  kicker: {
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 6,
+  },
+
+  heroTitle: {
+    color: theme.colors.text,
+    fontSize: 24,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+
+  heroSubtitle: {
+    color: theme.colors.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginTop: 6,
+  },
+
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -158,24 +221,6 @@ const styles = StyleSheet.create({
   title: {
     color: theme.colors.text,
     fontSize: 24,
-    fontWeight: '900',
-  },
-
-  countPill: {
-    minWidth: 34,
-    height: 34,
-    borderRadius: 999,
-    backgroundColor: 'rgba(220, 203, 255, 0.12)',
-    borderWidth: 1,
-    borderColor: theme.colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 10,
-  },
-
-  countPillText: {
-    color: theme.colors.accent,
-    fontSize: 12,
     fontWeight: '900',
   },
 
@@ -216,7 +261,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.borderAccent ?? theme.colors.accent,
     padding: 14,
-    ...theme.shadow.glowStrong,
+    ...theme.shadow.glow,
   },
 
   selectedImageWrap: {
@@ -248,25 +293,27 @@ const styles = StyleSheet.create({
   },
 
   noImageText: {
-    color: theme.colors.textMuted,
+    color: theme.colors.textSecondary,
     fontSize: 13,
-    fontWeight: '700',
     textAlign: 'center',
+    fontWeight: '700',
   },
 
   selectedLabel: {
     color: theme.colors.textMuted,
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: '900',
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 1,
+    textAlign: 'center',
     marginBottom: 4,
   },
 
   selectedName: {
     color: theme.colors.text,
-    fontSize: 24,
+    fontSize: 26,
     fontWeight: '900',
+    textAlign: 'center',
     marginBottom: 14,
   },
 
@@ -278,32 +325,36 @@ const styles = StyleSheet.create({
   secondaryButton: {
     flex: 1,
     backgroundColor: theme.colors.surfaceRaised,
-    borderRadius: 18,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: theme.colors.border,
     paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   secondaryButtonText: {
     color: theme.colors.text,
     fontSize: 14,
     fontWeight: '900',
-    textAlign: 'center',
   },
 
   primaryButton: {
     flex: 1,
-    backgroundColor: theme.colors.accent,
-    borderRadius: 18,
+    backgroundColor: theme.colors.primary,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.colors.borderAccent ?? theme.colors.accent,
     paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
     ...theme.shadow.glow,
   },
 
   primaryButtonText: {
-    color: theme.colors.background,
+    color: theme.colors.text,
     fontSize: 14,
     fontWeight: '900',
-    textAlign: 'center',
   },
 
   buttonPressed: {

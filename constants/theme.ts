@@ -48,6 +48,12 @@ export const theme = {
     pill: 999,
   },
 
+  layout: {
+    floatingNavBottom: 10,
+    floatingNavBarHeight: 78,
+    floatingNavClearance: 120,
+  },
+
   typography: {
     title: {
       fontSize: 30,
@@ -75,10 +81,10 @@ export const theme = {
     },
     glow: {
       shadowColor: '#8B5CF6',
-      shadowOpacity: 0.32,
-      shadowRadius: 14,
+      shadowOpacity: 0.18,
+      shadowRadius: 10,
       shadowOffset: { width: 0, height: 0 },
-      elevation: 8,
+      elevation: 5,
     },
   },
 }

@@ -1,4 +1,4 @@
-import { ImageSourcePropType } from 'react-native'
+import type { ImageSourcePropType } from 'react-native'
 
 export const scoreIcons: Record<string, ImageSourcePropType> = {
   gold: require('../assets/icons/icons.gold.png'),

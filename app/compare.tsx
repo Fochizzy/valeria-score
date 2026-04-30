@@ -1,172 +1,217 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AppState, ImageBackground, ScrollView, Share, View } from 'react-native'
+import { useLocalSearchParams, router } from 'expo-router'
+import { useFocusEffect } from '@react-navigation/native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import CompareHeroCard from '../components/CompareHeroCard'
+import CompareScoresCard from '../components/CompareScoresCard'
+import CompareStatsRow from '../components/CompareStatsRow'
+import CompareStatusStack from '../components/CompareStatusStack'
+import ManageAccountModal from '../components/ManageAccountModal'
+import SessionContextStrip from '../components/SessionContextStrip'
+import ValeriaHeader from '../components/ValeriaHeader'
+import { compareScreenStyles as styles } from '../components/compare-screen-styles'
+import { loadCompareDashboardData } from '../lib/compare-dashboard-data'
 import {
-  Alert,
-  Image,
-  Pressable,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native'
-import { useLocalSearchParams, useNavigation, router } from 'expo-router'
+  buildComparePlayerCountChoices,
+  buildCompareDashboardModel,
+  buildCompareSessionContextItems,
+  shouldAutoRouteCompareViewerToVictory,
+} from '../lib/compare-screen-state'
+import { type CompareEntry } from '../lib/compare-entries'
+import { resolveCompareGuestRemovalMode } from '../lib/compare-guest-removal'
+import { buildCompareEntryScoreRoute } from '../lib/compare-score-route'
+import { copyJoinCodeWithFeedback } from '../lib/copy-join-code-client'
+import { deleteOwnedGame } from '../lib/manage'
+import {
+  buildManageAccountMenuActions,
+  manageAccountAlertCopy,
+  manageAccountHeaderProps,
+  type ManageAccountModalAction,
+} from '../lib/manage-account-menu'
+import { logoutAndClearActiveSessionState } from '../lib/logout'
+import { buildDangerFlowCopy } from '../lib/p3-feedback'
+import {
+  shouldAutoRouteToVictoryOnLock,
+  subscribeToSessionActivity,
+  subscribeToSessionScores,
+} from '../lib/realtime'
+import { getBottomNavTopClearance } from '../lib/bottom-nav-layout'
+import {
+  MAX_COMPARE_PLAYER_COUNT,
+  MIN_COMPARE_PLAYER_COUNT,
+  clampComparePlayerCount,
+} from '../lib/compare-player-count'
+import {
+  clearActiveSessionState,
+  doesSessionExist,
+  getActiveJoinCode,
+  getActiveSessionId,
+  removeGuestPlayerFromSession,
+} from '../lib/sessions'
+import { resolveSessionRouteContext } from '../lib/session-route-context'
+import { finishGameViaRpc } from '../lib/session-admin-flow'
 import { supabase } from '../lib/supabase'
-import { subscribeToPlayerScores } from '../lib/realtime'
-import { finalizeGameStats } from '../lib/finalizeGameStats'
-import { theme } from '../constants/theme'
-import { cards } from '../data/cards'
-import { cardImages } from '../data/cardImages'
+import { Alert } from '../lib/themed-alert'
+import { buildVictoryRoute } from '../lib/victory-route'
+import { buildResultsShareMessage } from '../lib/victory-results'
+import { didAppBecomeActive } from '../lib/app-state-refresh'
 
-type ScoreRow = {
-  id: string
-  session_id: string
-  user_id: string | null
-  owner_user_id: string | null
-  guest_name: string | null
-  is_guest: boolean
-  total_score: number
-  game_locked: boolean
-  duke_slug: string | null
-  placement: number | null
-  is_winner: boolean | null
-}
-
-type ProfileRow = {
-  id: string
-  display_name: string | null
-  public_player_id: string | null
-}
-
-type CompareEntry = {
-  id: string
-  scoreId: string
-  label: string
-  playerId: string | null
-  totalScore: number
-  locked: boolean
-  isGuest: boolean
-  userId: string | null
-  dukeSlug: string | null
-  dukeName: string
-  placement: number | null
-  isWinner: boolean
-}
-
-function formatDukeName(slug: string | null | undefined) {
-  if (!slug) return 'No Duke'
-  const card = cards.find((item) => item.slug === slug)
-  if (card?.name) return card.name
-
-  return slug
-    .split('_')
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ')
-}
+const compareBackdrop = require('../assets/compare.png')
 
 export default function CompareScreen() {
-  const { sessionId, joinCode } = useLocalSearchParams<{
+  const insets = useSafeAreaInsets()
+  const { sessionId: routeSessionId, joinCode: routeJoinCode } = useLocalSearchParams<{
     sessionId: string
     joinCode?: string
   }>()
 
-  const navigation = useNavigation()
   const didLoadOnceRef = useRef(false)
+  const livePulseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoRoutedToVictoryRef = useRef(false)
+  const didFocusRefreshRef = useRef(false)
+  const appStateRef = useRef(AppState.currentState)
 
   const [scores, setScores] = useState<CompareEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [sharing, setSharing] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
+  const [accountMenuVisible, setAccountMenuVisible] = useState(false)
   const [finishing, setFinishing] = useState(false)
   const [livePulse, setLivePulse] = useState(false)
+  const [isCreator, setIsCreator] = useState(false)
+  const [sessionCreatorId, setSessionCreatorId] = useState('')
+  const [currentUserId, setCurrentUserId] = useState('')
+  const [expectedPlayerCount, setExpectedPlayerCount] = useState(MIN_COMPARE_PLAYER_COUNT)
+  const [savingPlayerTarget, setSavingPlayerTarget] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [loadNotice, setLoadNotice] = useState('')
+  const [effectiveSessionId, setEffectiveSessionId] = useState(
+    typeof routeSessionId === 'string' ? routeSessionId : ''
+  )
+  const [effectiveJoinCode, setEffectiveJoinCode] = useState(
+    typeof routeJoinCode === 'string' ? routeJoinCode : ''
+  )
 
-  const canShare = scores.length > 0 && !sharing
-  const canFinish = scores.length > 0 && !finishing
+  const copyableJoinCode = effectiveJoinCode
+  const compareModel = useMemo(
+    () =>
+      buildCompareDashboardModel({
+        entries: scores,
+        sessionCreatorId,
+        expectedPlayerCount,
+      }),
+    [expectedPlayerCount, scores, sessionCreatorId]
+  )
+  const {
+    savedScoreCount,
+    progress,
+    leader,
+    minimumPlayerCount,
+    canFinishScores,
+    finishBlockTitle,
+    finishBlockBody,
+  } = compareModel
+  const canShare = savedScoreCount > 0 && !sharing
+  const canAddGuest =
+    Boolean(effectiveSessionId) && progress.trackedParticipants < MAX_COMPARE_PLAYER_COUNT
+  const canFinish =
+    progress.allReady && canFinishScores && !finishing && !savingPlayerTarget && isCreator
+  const playerCountChoices = useMemo(
+    () =>
+      buildComparePlayerCountChoices({
+        expectedPlayerCount,
+        minimumPlayerCount,
+        disabled: !isCreator || savingPlayerTarget,
+      }),
+    [expectedPlayerCount, isCreator, minimumPlayerCount, savingPlayerTarget]
+  )
 
-  const safeJoinCode = useMemo(() => {
-    return typeof joinCode === 'string' ? joinCode : '------'
-  }, [joinCode])
+  const resolveSessionContext = useCallback(async () => {
+    const [storedSessionId, storedJoinCode] = await Promise.all([
+      getActiveSessionId(),
+      getActiveJoinCode(),
+    ])
+
+    const resolved = resolveSessionRouteContext({
+      routeSessionId: typeof routeSessionId === 'string' ? routeSessionId : '',
+      storedSessionId,
+      routeJoinCode: typeof routeJoinCode === 'string' ? routeJoinCode : '',
+      storedJoinCode,
+    })
+
+    setEffectiveSessionId(resolved.sessionId)
+    setEffectiveJoinCode(resolved.joinCode)
+  }, [routeJoinCode, routeSessionId])
+
+  const clearCompareState = useCallback((errorMessage: string) => {
+    setScores([])
+    setIsCreator(false)
+    setSessionCreatorId('')
+    setCurrentUserId('')
+    setExpectedPlayerCount(MIN_COMPARE_PLAYER_COUNT)
+    setLoadNotice('')
+    setLoadError(errorMessage)
+  }, [])
+
+  const handleCopyJoinCode = useCallback(async () => {
+    await copyJoinCodeWithFeedback(copyableJoinCode)
+  }, [copyableJoinCode])
 
   const fetchScores = useCallback(
     async (showLoading = false) => {
-      if (!sessionId) return
+      if (!effectiveSessionId) {
+        clearCompareState('Start or join a session before viewing compare data.')
+        if (showLoading) setLoading(false)
+        return
+      }
 
       try {
         if (showLoading) setLoading(true)
 
-        const { data: scoreData, error: scoreError } = await supabase
-          .from('player_scores')
-          .select(
-            'id, session_id, user_id, owner_user_id, guest_name, is_guest, total_score, game_locked, duke_slug, placement, is_winner'
+        // Defensive: if the locally-saved session id no longer points at a
+        // row in game_sessions, wipe local active state and send the user
+        // home so they don't end up scrolling an empty compare for a dead
+        // session.
+        const sessionStillLive = await doesSessionExist(effectiveSessionId)
+        if (!sessionStillLive) {
+          await clearActiveSessionState()
+          clearCompareState('That session is no longer available.')
+          Alert.alert(
+            'Session has ended',
+            'That session is no longer available. Start or join a new one to keep playing.',
+            [
+              {
+                text: 'OK',
+                onPress: () => router.replace('/create-session'),
+              },
+            ]
           )
-          .eq('session_id', sessionId)
-
-        if (scoreError) throw scoreError
-
-        const safeScores = (scoreData ?? []) as ScoreRow[]
-
-        const userIds = [
-          ...new Set(
-            safeScores
-              .map((row) => row.user_id)
-              .filter((value): value is string => Boolean(value))
-          ),
-        ]
-
-        let profileMap = new Map<string, ProfileRow>()
-
-        if (userIds.length > 0) {
-          const { data: profileData, error: profileError } = await supabase
-            .from('profiles')
-            .select('id, display_name, public_player_id')
-            .in('id', userIds)
-
-          if (profileError) throw profileError
-
-          profileMap = new Map(
-            ((profileData ?? []) as ProfileRow[]).map((row) => [row.id, row])
-          )
+          return
         }
 
-        const mapped: CompareEntry[] = safeScores
-          .map((row) => {
-            const profile = row.user_id ? profileMap.get(row.user_id) : undefined
-            const label = row.is_guest
-              ? row.guest_name || 'Guest Player'
-              : profile?.display_name || profile?.public_player_id || 'Player'
+        const dashboardData = await loadCompareDashboardData(effectiveSessionId)
 
-            return {
-              id: row.id,
-              scoreId: row.id,
-              label,
-              playerId: row.is_guest ? null : profile?.public_player_id || null,
-              totalScore: Number(row.total_score || 0),
-              locked: Boolean(row.game_locked),
-              isGuest: Boolean(row.is_guest),
-              userId: row.user_id,
-              dukeSlug: row.duke_slug ?? null,
-              dukeName: formatDukeName(row.duke_slug),
-              placement: row.placement ?? null,
-              isWinner: Boolean(row.is_winner),
-            }
-          })
-          .sort((a, b) => {
-            if ((a.placement ?? 9999) !== (b.placement ?? 9999)) {
-              return (a.placement ?? 9999) - (b.placement ?? 9999)
-            }
-            return b.totalScore - a.totalScore
-          })
-
-        setScores(mapped)
+        setCurrentUserId(dashboardData.currentUserId)
+        setIsCreator(dashboardData.isCreator)
+        setSessionCreatorId(dashboardData.sessionCreatorId)
+        setExpectedPlayerCount(dashboardData.expectedPlayerCount)
+        setScores(dashboardData.scores)
+        setLoadNotice(dashboardData.loadNotice)
+        setLoadError('')
         didLoadOnceRef.current = true
       } catch (err: any) {
-        Alert.alert('Load failed', err?.message ?? 'Unknown error')
+        console.error(err)
+        setLoadNotice('')
+        setLoadError(
+          err?.message ?? 'Unable to load live standings right now. Pull to retry.'
+        )
       } finally {
         if (showLoading) setLoading(false)
       }
     },
-    [sessionId]
+    [clearCompareState, effectiveSessionId]
   )
 
   const handleCreateSession = useCallback(() => {
@@ -181,25 +226,164 @@ export default function CompareScreen() {
     router.push('/duke-stats')
   }, [])
 
+  const goToGlobalTrends = useCallback(() => {
+    router.push('/global-trends')
+  }, [])
+
   const goToManageData = useCallback(() => {
     router.push('/manage-data')
   }, [])
 
   const addGuest = useCallback(() => {
+    if (!effectiveSessionId) {
+      Alert.alert('Missing session', 'Start or join a session before adding a guest.')
+      return
+    }
+
     router.push({
       pathname: '/guest-player',
       params: {
-        sessionId,
-        joinCode: safeJoinCode,
+        sessionId: effectiveSessionId,
+        joinCode: effectiveJoinCode,
       },
     })
-  }, [safeJoinCode, sessionId])
+  }, [effectiveJoinCode, effectiveSessionId])
+
+  const updateExpectedPlayerCount = useCallback(
+    async (nextCount: number, minimumCount: number) => {
+      if (!effectiveSessionId) {
+        Alert.alert('Missing session', 'Start or join a session before updating the table size.')
+        return
+      }
+
+      if (!isCreator) {
+        Alert.alert('Host only', 'Only the session creator can set the table size.')
+        return
+      }
+
+      const safeNextCount = Math.max(
+        clampComparePlayerCount(minimumCount),
+        clampComparePlayerCount(nextCount)
+      )
+      if (safeNextCount === expectedPlayerCount) {
+        return
+      }
+
+      const previousCount = expectedPlayerCount
+
+      try {
+        setSavingPlayerTarget(true)
+        setExpectedPlayerCount(safeNextCount)
+
+        const { data, error } = await supabase
+          .from('game_sessions')
+          .update({ expected_player_count: safeNextCount })
+          .eq('id', effectiveSessionId)
+          .select('expected_player_count')
+          .single()
+
+        if (error) throw error
+
+        setExpectedPlayerCount(
+          clampComparePlayerCount(Number(data?.expected_player_count ?? safeNextCount))
+        )
+      } catch (err: any) {
+        setExpectedPlayerCount(previousCount)
+        Alert.alert(
+          'Unable to update players',
+          err?.message ?? 'Please try updating the table size again.'
+        )
+      } finally {
+        setSavingPlayerTarget(false)
+      }
+    },
+    [effectiveSessionId, expectedPlayerCount, isCreator]
+  )
+
+  const openScoreEntry = useCallback(
+    (entry: CompareEntry) => {
+      const target = buildCompareEntryScoreRoute(entry, {
+        sessionId: effectiveSessionId,
+        joinCode: effectiveJoinCode,
+        currentUserId,
+      })
+
+      if (!target) return
+
+      router.push(target)
+    },
+    [currentUserId, effectiveJoinCode, effectiveSessionId]
+  )
+
+  const removeGuestEntry = useCallback(
+    (entry: CompareEntry, nextExpectedPlayerCount: number) => {
+      if (!effectiveSessionId) {
+        Alert.alert('Missing session', 'Start or join a session before removing a guest.')
+        return
+      }
+
+      if (!isCreator) {
+        Alert.alert('Host only', 'Only the session creator can remove guests from this game.')
+        return
+      }
+
+      const removalMode = resolveCompareGuestRemovalMode(entry)
+
+      if (!removalMode || !entry.scoreId) {
+        Alert.alert('Unavailable', 'This guest cannot be removed from the current game.')
+        return
+      }
+
+      const copy =
+        removalMode === 'guest-entry'
+          ? {
+              title: 'Remove guest from game?',
+              body: `${entry.label} will be removed from this session and any saved guest score for this seat will be deleted.`,
+            }
+          : {
+              title: 'Remove player from game?',
+              body: `${entry.label} will be removed from this session and any saved score for this added player seat will be deleted.`,
+            }
+
+      Alert.alert(
+        copy.title,
+        copy.body,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Remove',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await removeGuestPlayerFromSession(effectiveSessionId, {
+                  scoreId: entry.scoreId,
+                  removalMode,
+                  guestEntryId:
+                    removalMode === 'guest-entry' ? entry.guestEntryId : null,
+                  ownerUserId:
+                    removalMode === 'added-player-entry' ? entry.userId : null,
+                  nextExpectedPlayerCount,
+                })
+              } catch (err: any) {
+                Alert.alert('Remove failed', err?.message ?? 'Unknown error')
+              } finally {
+                await fetchScores(false)
+              }
+            },
+          },
+        ]
+      )
+    },
+    [effectiveSessionId, fetchScores, isCreator]
+  )
 
   const handleLogout = useCallback(async () => {
     try {
       setLoggingOut(true)
-      const { error } = await supabase.auth.signOut()
-      if (error) throw error
+      await logoutAndClearActiveSessionState({
+        signOut: () => supabase.auth.signOut(),
+        clearActiveSessionState,
+      })
       router.replace('/')
     } catch (err: any) {
       Alert.alert('Logout failed', err?.message ?? 'Unknown error')
@@ -209,1019 +393,364 @@ export default function CompareScreen() {
   }, [])
 
   const deleteSession = useCallback(async () => {
-    if (!sessionId) return
+    if (!effectiveSessionId) return
 
-    try {
-      setDeleting(true)
-
-      const { error: scoresError } = await supabase
-        .from('player_scores')
-        .delete()
-        .eq('session_id', sessionId)
-
-      if (scoresError) throw scoresError
-
-      const { error: playersError } = await supabase
-        .from('session_players')
-        .delete()
-        .eq('session_id', sessionId)
-
-      if (playersError) throw playersError
-
-      const { error: sessionError } = await supabase
-        .from('game_sessions')
-        .delete()
-        .eq('id', sessionId)
-
-      if (sessionError) throw sessionError
-
-      router.replace('/create-session')
-    } catch (err: any) {
-      Alert.alert('Delete failed', err?.message ?? 'Unknown error')
-    } finally {
-      setDeleting(false)
-    }
-  }, [sessionId])
-
-  const handleFinishGame = useCallback(async () => {
-    if (!sessionId) return
-
-    if (scores.length === 0) {
-      Alert.alert('No scores yet', 'Add at least one score before finishing the game.')
+    if (!isCreator) {
+      Alert.alert('Host only', 'Only the session creator can delete this session.')
       return
     }
 
-    Alert.alert(
-      'Finish game?',
-      'This will lock all saved scores, rank players, mark the winner, and write stats.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Finish Game',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setFinishing(true)
+    const copy = buildDangerFlowCopy('deleteSession', copyableJoinCode || 'this session')
 
-              const { error: lockError } = await supabase
-                .from('player_scores')
-                .update({
-                  game_locked: true,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('session_id', sessionId)
-
-              if (lockError) throw lockError
-
-              await finalizeGameStats(sessionId)
-              await fetchScores(false)
-
-              Alert.alert(
-                'Game finished',
-                'Scores were locked, ranked, and stats were finalized.'
-              )
-            } catch (err: any) {
-              Alert.alert('Finish failed', err?.message ?? 'Unknown error')
-            } finally {
-              setFinishing(false)
-            }
-          },
-        },
-      ]
-    )
-  }, [fetchScores, scores.length, sessionId])
-
-  useLayoutEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <TouchableOpacity
-          onPress={() =>
-            Alert.alert('Menu', '', [
-              { text: 'Add Guest', onPress: addGuest },
-              { text: 'Player Stats', onPress: goToPlayerStats },
-              { text: 'Duke Stats', onPress: goToDukeStats },
-              { text: 'Manage Data', onPress: goToManageData },
-              { text: 'New Session', onPress: handleCreateSession },
-              { text: 'Logout', onPress: handleLogout },
-              {
-                text: 'Delete Session',
-                style: 'destructive',
-                onPress: deleteSession,
-              },
-              { text: 'Cancel', style: 'cancel' },
-            ])
+    Alert.alert(copy.title, copy.body, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: copy.confirmLabel,
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            setDeleting(true)
+            await deleteOwnedGame(effectiveSessionId)
+            router.replace('/create-session')
+          } catch (err: any) {
+            Alert.alert('Delete failed', err?.message ?? 'Unknown error')
+          } finally {
+            setDeleting(false)
           }
-          style={styles.headerMenuButton}
-        >
-          <Text style={styles.headerMenuText}>⋯</Text>
-        </TouchableOpacity>
-      ),
-    })
+        },
+      },
+    ])
+  }, [copyableJoinCode, effectiveSessionId, isCreator])
+
+  const handleFinishGame = useCallback(async () => {
+    if (!effectiveSessionId) return
+
+    if (!isCreator) {
+      Alert.alert('Host only', 'Only the session creator can finish the game.')
+      return
+    }
+
+    if (!progress.allReady || !canFinishScores) {
+      Alert.alert(
+        finishBlockTitle ?? 'Scores still missing',
+        finishBlockBody ?? 'Finish the remaining scores before locking the game.'
+      )
+      return
+    }
+
+    const copy = buildDangerFlowCopy('finishGame')
+
+    Alert.alert(copy.title, copy.body, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: copy.confirmLabel,
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            setFinishing(true)
+            await finishGameViaRpc(effectiveSessionId, {
+              invokeRpc: async (fn, args) => supabase.rpc(fn, args),
+            })
+            await fetchScores(false)
+            router.replace(
+              buildVictoryRoute(effectiveSessionId, effectiveJoinCode) as never
+            )
+          } catch (err: any) {
+            Alert.alert('Finish failed', err?.message ?? 'Unknown error')
+          } finally {
+            setFinishing(false)
+          }
+        },
+      },
+    ])
   }, [
-    navigation,
-    addGuest,
-    goToPlayerStats,
-    goToDukeStats,
-    goToManageData,
-    handleCreateSession,
-    handleLogout,
-    deleteSession,
+    canFinishScores,
+    effectiveJoinCode,
+    effectiveSessionId,
+    finishBlockBody,
+    finishBlockTitle,
+    fetchScores,
+    isCreator,
+    progress.allReady,
   ])
+
+  useEffect(() => {
+    void resolveSessionContext()
+  }, [resolveSessionContext])
+
+  useEffect(() => {
+    autoRoutedToVictoryRef.current = false
+    didFocusRefreshRef.current = false
+  }, [effectiveSessionId])
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!effectiveSessionId) {
+        return
+      }
+
+      if (!didFocusRefreshRef.current) {
+        didFocusRefreshRef.current = true
+        return
+      }
+
+      void fetchScores(false)
+    }, [effectiveSessionId, fetchScores])
+  )
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (didAppBecomeActive(appStateRef.current, nextState) && effectiveSessionId) {
+        void fetchScores(false)
+      }
+
+      appStateRef.current = nextState
+    })
+
+    return () => {
+      subscription.remove()
+    }
+  }, [effectiveSessionId, fetchScores])
 
   useEffect(() => {
     fetchScores(true)
 
-    if (!sessionId) return
+    if (!effectiveSessionId) {
+      if (livePulseTimeoutRef.current) {
+        clearTimeout(livePulseTimeoutRef.current)
+        livePulseTimeoutRef.current = null
+      }
+      return
+    }
 
-    const unsubscribe = subscribeToPlayerScores(sessionId, () => {
+    const unsubscribe = subscribeToSessionActivity(effectiveSessionId, () => {
       setLivePulse(true)
-      fetchScores(false)
-      setTimeout(() => setLivePulse(false), 900)
+      void fetchScores(false)
+      if (livePulseTimeoutRef.current) {
+        clearTimeout(livePulseTimeoutRef.current)
+      }
+      livePulseTimeoutRef.current = setTimeout(() => {
+        setLivePulse(false)
+        livePulseTimeoutRef.current = null
+      }, 900)
     })
 
-    return unsubscribe
-  }, [fetchScores, sessionId])
+    return () => {
+      if (livePulseTimeoutRef.current) {
+        clearTimeout(livePulseTimeoutRef.current)
+        livePulseTimeoutRef.current = null
+      }
+      unsubscribe()
+    }
+  }, [effectiveSessionId, fetchScores])
 
-  const shareResults = async () => {
+  useEffect(() => {
+    if (!effectiveSessionId || isCreator) {
+      return
+    }
+
+    return subscribeToSessionScores(effectiveSessionId, (payload) => {
+      if (
+        !shouldAutoRouteToVictoryOnLock({
+          sessionId: effectiveSessionId,
+          payload,
+          alreadyRouted: autoRoutedToVictoryRef.current,
+        })
+      ) {
+        return
+      }
+
+      autoRoutedToVictoryRef.current = true
+      router.replace(buildVictoryRoute(effectiveSessionId, effectiveJoinCode) as never)
+    })
+  }, [effectiveJoinCode, effectiveSessionId, isCreator])
+
+  useEffect(() => {
+    if (loading || loadError) {
+      return
+    }
+
+    if (
+      !shouldAutoRouteCompareViewerToVictory({
+        sessionId: effectiveSessionId,
+        isCreator,
+        allLocked: progress.allLocked,
+        alreadyRouted: autoRoutedToVictoryRef.current,
+      })
+    ) {
+      return
+    }
+
+    autoRoutedToVictoryRef.current = true
+    router.replace(buildVictoryRoute(effectiveSessionId, effectiveJoinCode) as never)
+  }, [
+    effectiveJoinCode,
+    effectiveSessionId,
+    isCreator,
+    loadError,
+    loading,
+    progress.allLocked,
+  ])
+
+  const shareResults = useCallback(async () => {
     try {
       setSharing(true)
 
-      const lines = scores.map((entry, index) => {
-        const crown = entry.isWinner || index === 0 ? '👑 ' : ''
-        const idText = entry.playerId ? ` (${entry.playerId})` : ''
-        const rankText = entry.placement ? `${entry.placement}. ` : `${index + 1}. `
-        return `${rankText}${crown}${entry.label}${idText} — ${entry.totalScore} · ${entry.dukeName}`
-      })
-
-      const message = ['Valeria Results', '', ...lines].join('\n')
-
-      await Share.share({
-        title: 'Valeria Results',
-        message,
-      })
+        await Share.share({
+          title: 'Valeria Results',
+          message: buildResultsShareMessage(
+            scores.filter((entry) => entry.locked || entry.hasScore)
+          ),
+        })
     } catch (err: any) {
       Alert.alert('Share failed', err?.message ?? 'Unknown error')
     } finally {
       setSharing(false)
     }
-  }
+  }, [scores])
 
-  const leader = scores[0] ?? null
+  const accountMenuActions = useMemo<ManageAccountModalAction[]>(
+    () =>
+      buildManageAccountMenuActions({
+        includeDeleteSession: isCreator,
+      }).map((action) => {
+        switch (action.id) {
+          case 'manageData':
+            return { ...action, onPress: goToManageData }
+          case 'newSession':
+            return { ...action, onPress: handleCreateSession }
+          case 'logout':
+            return { ...action, onPress: handleLogout }
+          case 'deleteSession':
+            return { ...action, onPress: deleteSession }
+          case 'cancel':
+            return { ...action }
+          default:
+            return action
+        }
+      }),
+    [
+      deleteSession,
+      goToManageData,
+      handleCreateSession,
+      handleLogout,
+      isCreator,
+    ]
+  )
+
+  const openAccountActions = useCallback(() => {
+    setAccountMenuVisible(true)
+  }, [])
+
+  const contextItems = useMemo(
+    () =>
+      buildCompareSessionContextItems({
+        joinCode: copyableJoinCode,
+        isCreator,
+        livePulse,
+        statusLabel: progress.statusLabel,
+      }).map((item, index) =>
+        index === 0 ? { ...item, onPress: handleCopyJoinCode } : item
+      ),
+    [
+      copyableJoinCode,
+      handleCopyJoinCode,
+      isCreator,
+      livePulse,
+      progress.statusLabel,
+    ]
+  )
 
   return (
-    <ScrollView
-      style={styles.screen}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
+    <ImageBackground
+      source={compareBackdrop}
+      style={styles.pageBackground}
+      imageStyle={styles.pageBackgroundImage}
+      resizeMode="cover"
     >
-      <View style={[styles.heroCard, livePulse && styles.heroCardLive]}>
-        <View style={styles.heroTopRow}>
-          <View style={styles.heroTextWrap}>
-            <Text style={styles.heroKicker}>Live Session</Text>
-            <Text style={styles.heroTitle}>Compare Scores</Text>
-            <Text style={styles.heroSubtitle}>Scores update live as players save.</Text>
-          </View>
+      <View style={styles.pageScrim}>
+        <ScrollView
+          style={styles.screen}
+          contentContainerStyle={[
+            styles.content,
+            {
+              paddingTop: getBottomNavTopClearance(insets.top),
+              paddingBottom: insets.bottom + 24,
+            },
+          ]}
+          showsVerticalScrollIndicator={false}
+        >
+          <ValeriaHeader
+            compact
+            showBack
+            title="Compare Scores"
+            subtitle="Live session standings"
+            {...manageAccountHeaderProps}
+            onRightPress={openAccountActions}
+            rightDisabled={loggingOut || deleting}
+          />
 
-          <View style={styles.joinCodeCard}>
-            <Text style={styles.joinCodeLabel}>Code</Text>
-            <Text style={styles.joinCodeValue}>{safeJoinCode}</Text>
-          </View>
-        </View>
+          <SessionContextStrip items={contextItems} />
 
-        <View style={styles.heroBottomRow}>
-          <View style={styles.liveChip}>
-            <Text style={styles.liveChipText}>{livePulse ? 'Live Update' : 'Realtime'}</Text>
-          </View>
+          <CompareStatusStack
+            leader={leader}
+            loadNotice={loadNotice}
+            loadError={loadError}
+            hasScores={scores.length > 0}
+            loading={loading}
+            didLoadOnce={didLoadOnceRef.current}
+            deleting={deleting}
+            onRetry={() => fetchScores(true)}
+          />
 
-          <View style={styles.heroActions}>
-            <Pressable
-              style={({ pressed }) => [
-                styles.secondaryHeroButton,
-                pressed && styles.buttonPressed,
-                !canShare && styles.ghostedButton,
-              ]}
-              onPress={shareResults}
-              disabled={!canShare}
-            >
-              <Text style={[styles.secondaryHeroButtonText, !canShare && styles.ghostedButtonText]}>
-                {sharing ? 'Sharing...' : 'Share'}
-              </Text>
-            </Pressable>
+          <CompareScoresCard
+            scores={scores}
+            loading={loading}
+            sessionId={effectiveSessionId}
+            joinCode={effectiveJoinCode}
+            currentUserId={currentUserId}
+            viewerCanRemoveGuestSeats={isCreator}
+            expectedPlayerCount={expectedPlayerCount}
+            minimumPlayerCount={minimumPlayerCount}
+            onOpenScoreEntry={openScoreEntry}
+            onRemoveGuestEntry={removeGuestEntry}
+          />
 
-            <Pressable
-              style={({ pressed }) => [
-                styles.finishButton,
-                pressed && styles.buttonPressed,
-                !canFinish && styles.ghostedButton,
-              ]}
-              onPress={handleFinishGame}
-              disabled={!canFinish}
-            >
-              <Text style={[styles.finishButtonText, !canFinish && styles.ghostedButtonText]}>
-                {finishing ? 'Finishing...' : 'Finish Game'}
-              </Text>
-            </Pressable>
-          </View>
-        </View>
+          <CompareHeroCard
+            isCreator={isCreator}
+            livePulse={livePulse}
+            canShare={canShare}
+            sharing={sharing}
+            canAddGuest={canAddGuest}
+            canFinish={canFinish}
+            finishing={finishing}
+            expectedPlayerCount={expectedPlayerCount}
+            savingPlayerTarget={savingPlayerTarget}
+            progressLabel={progress.progressLabel}
+            guestParticipants={progress.guestParticipants}
+            statusLabel={progress.statusLabel}
+            playerCountChoices={playerCountChoices}
+            onShare={shareResults}
+            onAddGuest={addGuest}
+            onFinishGame={handleFinishGame}
+            onUpdateExpectedPlayerCount={updateExpectedPlayerCount}
+          />
+
+          <CompareStatsRow
+            onPressPlayerStats={goToPlayerStats}
+            onPressDukeStats={goToDukeStats}
+            onPressGlobalTrends={goToGlobalTrends}
+          />
+        </ScrollView>
+
+        <ManageAccountModal
+          visible={accountMenuVisible}
+          title={manageAccountAlertCopy.title}
+          message={manageAccountAlertCopy.message}
+          actions={accountMenuActions}
+          onRequestClose={() => setAccountMenuVisible(false)}
+        />
       </View>
-
-      {leader ? (
-        <View style={styles.leaderCard}>
-          <Text style={styles.leaderKicker}>
-            {leader.isWinner || leader.placement === 1 ? 'Winner' : 'Current Leader'}
-          </Text>
-          <View style={styles.leaderRow}>
-            <View style={styles.leaderThumbWrap}>
-              {leader.dukeSlug && cardImages[leader.dukeSlug] ? (
-                <Image
-                  source={cardImages[leader.dukeSlug]}
-                  style={styles.leaderThumb}
-                  resizeMode="cover"
-                />
-              ) : (
-                <View style={styles.leaderThumbFallback}>
-                  <Text style={styles.leaderThumbFallbackText}>No Duke</Text>
-                </View>
-              )}
-            </View>
-
-            <View style={styles.leaderMetaWrap}>
-              <Text style={styles.leaderName}>👑 {leader.label}</Text>
-              <Text style={styles.leaderMeta}>
-                {leader.playerId ? `ID: ${leader.playerId}` : 'ID: —'}
-              </Text>
-              <Text style={styles.leaderDuke}>{leader.dukeName}</Text>
-            </View>
-
-            <View style={styles.leaderScoreWrap}>
-              <View
-                style={[
-                  styles.statusDot,
-                  leader.locked ? styles.statusDotLocked : styles.statusDotOpen,
-                ]}
-              />
-              <Text style={styles.leaderScore}>{leader.totalScore}</Text>
-            </View>
-          </View>
-        </View>
-      ) : null}
-
-      <View style={styles.sectionCard}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Standings</Text>
-          <View style={styles.sectionBadge}>
-            <Text style={styles.sectionBadgeText}>{scores.length}</Text>
-          </View>
-        </View>
-
-        {loading ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>Loading scores...</Text>
-            <Text style={styles.emptyText}>Pulling the latest results for this session.</Text>
-          </View>
-        ) : scores.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>No scores yet</Text>
-            <Text style={styles.emptyText}>
-              Add your own score or a guest player to begin the standings.
-            </Text>
-          </View>
-        ) : (
-          scores.map((entry, index) => (
-            <View
-              key={entry.id}
-              style={[
-                styles.scoreRow,
-                (entry.isWinner || index === 0) && styles.scoreRowWinner,
-              ]}
-            >
-              <View style={styles.rankWrap}>
-                {entry.isWinner || index === 0 ? <Text style={styles.tinyCrown}>👑</Text> : null}
-                <View
-                  style={[
-                    styles.rankBubble,
-                    (entry.isWinner || index === 0) && styles.rankBubbleWinner,
-                  ]}
-                >
-                  <Text style={styles.rankBubbleText}>
-                    {entry.placement ?? index + 1}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.thumbWrap}>
-                {entry.dukeSlug && cardImages[entry.dukeSlug] ? (
-                  <Image
-                    source={cardImages[entry.dukeSlug]}
-                    style={styles.thumb}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <View style={styles.thumbFallback}>
-                    <Text style={styles.thumbFallbackText}>No Duke</Text>
-                  </View>
-                )}
-              </View>
-
-              <View style={styles.scoreMeta}>
-                <Text style={styles.scoreName}>
-                  {entry.label}
-                  {entry.isGuest ? ' (Guest)' : ''}
-                </Text>
-
-                <Text style={styles.scoreDuke}>{entry.dukeName}</Text>
-
-                <View style={styles.scoreStatusRow}>
-                  <View
-                    style={[
-                      styles.statusDot,
-                      entry.locked ? styles.statusDotLocked : styles.statusDotOpen,
-                    ]}
-                  />
-                  <Text style={styles.scoreSubtext}>
-                    {entry.playerId ? `ID: ${entry.playerId}` : 'ID: —'} ·{' '}
-                    {entry.locked ? 'Locked' : 'Open'}
-                  </Text>
-                </View>
-              </View>
-
-              <Text style={styles.scoreValue}>{entry.totalScore}</Text>
-            </View>
-          ))
-        )}
-      </View>
-
-      <View style={styles.actionsCard}>
-        <Text style={styles.sectionTitle}>Session Actions</Text>
-
-        <View style={styles.actionsGrid}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.primaryGridButton,
-              pressed && styles.buttonPressed,
-              sharing && styles.buttonDisabled,
-            ]}
-            onPress={shareResults}
-            disabled={sharing}
-          >
-            <Text style={styles.primaryGridButtonText}>
-              {sharing ? 'Sharing...' : 'Share Results'}
-            </Text>
-          </Pressable>
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.gridButton,
-              pressed && styles.buttonPressed,
-            ]}
-            onPress={addGuest}
-          >
-            <Text style={styles.gridButtonText}>Add Guest</Text>
-          </Pressable>
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.finishGridButton,
-              pressed && styles.buttonPressed,
-              !canFinish && styles.buttonDisabled,
-            ]}
-            onPress={handleFinishGame}
-            disabled={!canFinish}
-          >
-            <Text style={styles.finishGridButtonText}>
-              {finishing ? 'Finishing...' : 'Finish Game'}
-            </Text>
-          </Pressable>
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.gridButton,
-              pressed && styles.buttonPressed,
-            ]}
-            onPress={goToPlayerStats}
-          >
-            <Text style={styles.gridButtonText}>Player Stats</Text>
-          </Pressable>
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.gridButton,
-              pressed && styles.buttonPressed,
-            ]}
-            onPress={goToDukeStats}
-          >
-            <Text style={styles.gridButtonText}>Duke Stats</Text>
-          </Pressable>
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.gridButton,
-              pressed && styles.buttonPressed,
-            ]}
-            onPress={goToManageData}
-          >
-            <Text style={styles.gridButtonText}>Manage Data</Text>
-          </Pressable>
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.gridButton,
-              pressed && styles.buttonPressed,
-            ]}
-            onPress={handleCreateSession}
-          >
-            <Text style={styles.gridButtonText}>New Session</Text>
-          </Pressable>
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.logoutButton,
-              pressed && styles.buttonPressed,
-              loggingOut && styles.buttonDisabled,
-            ]}
-            onPress={handleLogout}
-            disabled={loggingOut}
-          >
-            <Text style={styles.logoutButtonText}>
-              {loggingOut ? 'Logging Out...' : 'Logout'}
-            </Text>
-          </Pressable>
-        </View>
-      </View>
-
-      {deleting ? (
-        <View style={styles.statusCard}>
-          <Text style={styles.statusTitle}>Deleting session...</Text>
-          <Text style={styles.statusText}>
-            Removing scores, players, and session record.
-          </Text>
-        </View>
-      ) : null}
-    </ScrollView>
+    </ImageBackground>
   )
 }
-
-const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
-
-  content: {
-    padding: 12,
-    paddingBottom: 28,
-  },
-
-  headerMenuButton: {
-    paddingRight: 12,
-  },
-
-  headerMenuText: {
-    fontSize: 22,
-    color: theme.colors.text,
-    fontWeight: '900',
-  },
-
-  heroCard: {
-    backgroundColor: theme.colors.surfaceAlt,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: theme.colors.borderAccent ?? theme.colors.border,
-    padding: 14,
-    marginBottom: 12,
-    ...theme.shadow.card,
-  },
-
-  heroCardLive: {
-    ...theme.shadow.glowStrong,
-  },
-
-  heroTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 10,
-    marginBottom: 12,
-  },
-
-  heroTextWrap: {
-    flex: 1,
-    minWidth: 0,
-  },
-
-  heroKicker: {
-    color: theme.colors.textMuted,
-    fontSize: 11,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: 5,
-  },
-
-  heroTitle: {
-    color: theme.colors.text,
-    fontSize: 28,
-    fontWeight: '900',
-    marginBottom: 6,
-  },
-
-  heroSubtitle: {
-    color: theme.colors.textSecondary,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '700',
-  },
-
-  joinCodeCard: {
-    minWidth: 96,
-    alignSelf: 'flex-start',
-    backgroundColor: theme.colors.surfaceRaised,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: theme.colors.accent,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-
-  joinCodeLabel: {
-    color: theme.colors.textMuted,
-    fontSize: 10,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    marginBottom: 2,
-  },
-
-  joinCodeValue: {
-    color: theme.colors.text,
-    fontSize: 18,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
-
-  heroBottomRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 10,
-  },
-
-  heroActions: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'center',
-  },
-
-  liveChip: {
-    backgroundColor: 'rgba(220, 203, 255, 0.12)',
-    borderWidth: 1,
-    borderColor: theme.colors.accent,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-  },
-
-  liveChipText: {
-    color: theme.colors.accent,
-    fontSize: 11,
-    fontWeight: '900',
-  },
-
-  secondaryHeroButton: {
-    backgroundColor: theme.colors.surfaceRaised,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-
-  secondaryHeroButtonText: {
-    color: theme.colors.text,
-    fontSize: 13,
-    fontWeight: '900',
-  },
-
-  finishButton: {
-    backgroundColor: theme.colors.accent,
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    ...theme.shadow.glow,
-  },
-
-  finishButtonText: {
-    color: theme.colors.background,
-    fontSize: 13,
-    fontWeight: '900',
-  },
-
-  leaderCard: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: '#E7C768',
-    padding: 14,
-    marginBottom: 12,
-    ...theme.shadow.card,
-  },
-
-  leaderKicker: {
-    color: '#E7C768',
-    fontSize: 11,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginBottom: 8,
-  },
-
-  leaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-
-  leaderThumbWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 14,
-    overflow: 'hidden',
-    backgroundColor: theme.colors.backgroundAlt,
-    borderWidth: 1,
-    borderColor: '#E7C768',
-    marginRight: 10,
-  },
-
-  leaderThumb: {
-    width: '100%',
-    height: '100%',
-  },
-
-  leaderThumbFallback: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 4,
-  },
-
-  leaderThumbFallbackText: {
-    color: theme.colors.textMuted,
-    fontSize: 9,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-
-  leaderMetaWrap: {
-    flex: 1,
-    minWidth: 0,
-  },
-
-  leaderName: {
-    color: theme.colors.text,
-    fontSize: 20,
-    fontWeight: '900',
-    marginBottom: 2,
-  },
-
-  leaderMeta: {
-    color: theme.colors.textSecondary,
-    fontSize: 11,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-
-  leaderDuke: {
-    color: theme.colors.accent,
-    fontSize: 12,
-    fontWeight: '800',
-  },
-
-  leaderScoreWrap: {
-    alignItems: 'flex-end',
-    marginLeft: 10,
-  },
-
-  leaderScore: {
-    color: theme.colors.text,
-    fontSize: 32,
-    fontWeight: '900',
-    marginTop: 4,
-  },
-
-  sectionCard: {
-    backgroundColor: theme.colors.surfaceAlt,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: 10,
-    marginBottom: 12,
-    ...theme.shadow.card,
-  },
-
-  actionsCard: {
-    backgroundColor: theme.colors.surfaceAlt,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: 12,
-    marginBottom: 12,
-    ...theme.shadow.card,
-  },
-
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-
-  sectionTitle: {
-    color: theme.colors.text,
-    fontSize: 17,
-    fontWeight: '900',
-    marginBottom: 10,
-  },
-
-  sectionBadge: {
-    minWidth: 28,
-    height: 28,
-    borderRadius: 999,
-    backgroundColor: 'rgba(220, 203, 255, 0.12)',
-    borderWidth: 1,
-    borderColor: theme.colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 8,
-  },
-
-  sectionBadgeText: {
-    color: theme.colors.accent,
-    fontSize: 12,
-    fontWeight: '900',
-  },
-
-  emptyState: {
-    backgroundColor: theme.colors.surfaceRaised,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: 16,
-  },
-
-  emptyTitle: {
-    color: theme.colors.text,
-    fontSize: 15,
-    fontWeight: '900',
-    marginBottom: 4,
-  },
-
-  emptyText: {
-    color: theme.colors.textSecondary,
-    fontSize: 12,
-    lineHeight: 18,
-    fontWeight: '700',
-  },
-
-  scoreRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: theme.colors.surfaceRaised,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    marginBottom: 8,
-  },
-
-  scoreRowWinner: {
-    borderColor: '#E7C768',
-    ...theme.shadow.card,
-  },
-
-  rankWrap: {
-    width: 34,
-    alignItems: 'center',
-    marginRight: 10,
-  },
-
-  tinyCrown: {
-    fontSize: 12,
-    marginBottom: 2,
-  },
-
-  rankBubble: {
-    width: 30,
-    height: 30,
-    borderRadius: 999,
-    backgroundColor: theme.colors.backgroundAlt,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  rankBubbleWinner: {
-    backgroundColor: 'rgba(231, 199, 104, 0.16)',
-    borderColor: '#E7C768',
-  },
-
-  rankBubbleText: {
-    color: theme.colors.text,
-    fontSize: 12,
-    fontWeight: '900',
-  },
-
-  thumbWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-    overflow: 'hidden',
-    backgroundColor: theme.colors.backgroundAlt,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    marginRight: 10,
-  },
-
-  thumb: {
-    width: '100%',
-    height: '100%',
-  },
-
-  thumbFallback: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 4,
-  },
-
-  thumbFallbackText: {
-    color: theme.colors.textMuted,
-    fontSize: 8,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-
-  scoreMeta: {
-    flex: 1,
-    minWidth: 0,
-    paddingRight: 8,
-  },
-
-  scoreName: {
-    color: theme.colors.text,
-    fontSize: 15,
-    fontWeight: '900',
-    marginBottom: 2,
-  },
-
-  scoreDuke: {
-    color: theme.colors.accent,
-    fontSize: 11,
-    fontWeight: '800',
-    marginBottom: 4,
-  },
-
-  scoreStatusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-
-  scoreSubtext: {
-    color: theme.colors.textMuted,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 999,
-    marginRight: 6,
-  },
-
-  statusDotLocked: {
-    backgroundColor: theme.colors.success,
-  },
-
-  statusDotOpen: {
-    backgroundColor: theme.colors.error,
-  },
-
-  scoreValue: {
-    color: theme.colors.text,
-    fontSize: 28,
-    fontWeight: '900',
-  },
-
-  actionsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-
-  primaryGridButton: {
-    width: '48%',
-    backgroundColor: theme.colors.accent,
-    borderRadius: 18,
-    paddingVertical: 14,
-    paddingHorizontal: 12,
-    ...theme.shadow.glow,
-  },
-
-  primaryGridButtonText: {
-    color: theme.colors.background,
-    fontSize: 13,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-
-  finishGridButton: {
-    width: '48%',
-    backgroundColor: 'rgba(231, 199, 104, 0.14)',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#E7C768',
-    paddingVertical: 14,
-    paddingHorizontal: 12,
-  },
-
-  finishGridButtonText: {
-    color: '#E7C768',
-    fontSize: 13,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-
-  gridButton: {
-    width: '48%',
-    backgroundColor: theme.colors.surfaceRaised,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingVertical: 14,
-    paddingHorizontal: 12,
-  },
-
-  gridButtonText: {
-    color: theme.colors.text,
-    fontSize: 13,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-
-  logoutButton: {
-    width: '48%',
-    backgroundColor: 'rgba(240, 138, 126, 0.12)',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: theme.colors.error,
-    paddingVertical: 14,
-    paddingHorizontal: 12,
-  },
-
-  logoutButtonText: {
-    color: theme.colors.error,
-    fontSize: 13,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-
-  statusCard: {
-    backgroundColor: theme.colors.surfaceAlt,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: theme.colors.error,
-    padding: 14,
-    marginBottom: 8,
-  },
-
-  statusTitle: {
-    color: theme.colors.text,
-    fontSize: 15,
-    fontWeight: '900',
-    marginBottom: 4,
-  },
-
-  statusText: {
-    color: theme.colors.textSecondary,
-    fontSize: 12,
-    lineHeight: 17,
-    fontWeight: '700',
-  },
-
-  ghostedButton: {
-    opacity: 0.38,
-  },
-
-  ghostedButtonText: {
-    opacity: 0.75,
-  },
-
-  buttonPressed: {
-    transform: [{ scale: 0.98 }],
-    opacity: 0.92,
-  },
-
-  buttonDisabled: {
-    opacity: 0.5,
-  },
-})

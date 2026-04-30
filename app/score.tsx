@@ -1,21 +1,30 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert,
+  AppState,
+  type LayoutChangeEvent,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
   Pressable,
   Image,
 } from 'react-native'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { router, useLocalSearchParams } from 'expo-router'
+import { useFocusEffect } from '@react-navigation/native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as Haptics from 'expo-haptics'
 import { ScoreRow } from '../components/ScoreRow'
 import DukePicker from '../components/DukePicker'
 import { ScoreTotal } from '../components/ScoreTotal'
+import CountBadge from '../components/CountBadge'
+import ManageAccountModal from '../components/ManageAccountModal'
+import SessionContextStrip from '../components/SessionContextStrip'
 import { theme } from '../constants/theme'
 import { cards, type DukeCard, type StatKey } from '../data/cards'
 import { cardImages } from '../data/cardImages'
+import { Alert } from '../lib/themed-alert'
 import { getStatsForCard, type StatMetaItem } from '../data/statMeta'
 import {
   calculateTotalScore,
@@ -25,12 +34,54 @@ import {
   normalizeScoreInputs,
   type ScoreInputs,
 } from '../lib/scoring'
+import { groupScoreScreenStats } from '../lib/score-stat-layout'
+import { getScoreSectionHeaderMeta } from '../lib/score-section-header'
 import {
+  loadSessionLockState,
   loadMyExistingScore,
   saveMyScore,
 } from '../lib/scores'
-import { getActiveSessionId } from '../lib/sessions'
+import {
+  buildScoreDraftStorageKey,
+  hasUnsavedScoreChanges,
+  isSessionFinished,
+  parseStoredScoreDraft,
+  resolveScoreActionVisibility,
+  resolveLoadedScoreState,
+  resolveScoreSessionId,
+  resolveScoreScrollResetTarget,
+  shouldRefreshScoreLockOnForeground,
+  shouldAutoRouteScoreToVictory,
+  shouldResetScoreScrollOnDukeSelection,
+} from '../lib/score-screen-state'
+import { copyJoinCodeWithFeedback } from '../lib/copy-join-code-client'
+import {
+  buildManageAccountMenuActions,
+  manageAccountAlertCopy,
+  type ManageAccountModalAction,
+} from '../lib/manage-account-menu'
+import {
+  buildScoreSaveFeedback,
+  sessionUiCopy,
+} from '../lib/p3-feedback'
+import { buildBottomNavRoute } from '../lib/bottom-nav-route'
+import { getBottomNavTopClearance } from '../lib/bottom-nav-layout'
+import { performSafeBackNavigation } from '../lib/back-navigation'
+import { filterDukesByQuery } from '../lib/duke-search'
+import { logoutAndClearActiveSessionState } from '../lib/logout'
+import {
+  shouldAutoRouteToVictoryOnLock,
+  subscribeToSessionActivity,
+  subscribeToSessionScores,
+} from '../lib/realtime'
+import {
+  clearActiveSessionState,
+  doesSessionExist,
+  getActiveSessionId,
+} from '../lib/sessions'
 import { supabase } from '../lib/supabase'
+import { buildVictoryRoute } from '../lib/victory-route'
+import { didAppBecomeActive } from '../lib/app-state-refresh'
 
 function getSectionAccent(title: string) {
   switch (title) {
@@ -40,11 +91,17 @@ function getSectionAccent(title: string) {
         pillBg: 'rgba(109, 90, 230, 0.16)',
         glow: '#8B5CF6',
       }
-    case 'Equipment':
+    case 'Symbols':
       return {
         borderColor: '#E7C768',
         pillBg: 'rgba(231, 199, 104, 0.14)',
         glow: '#E7C768',
+      }
+    case 'Monster Symbols':
+      return {
+        borderColor: '#F59E0B',
+        pillBg: 'rgba(245, 158, 11, 0.16)',
+        glow: '#F59E0B',
       }
     case 'Counts':
       return {
@@ -52,7 +109,7 @@ function getSectionAccent(title: string) {
         pillBg: 'rgba(89, 183, 255, 0.14)',
         glow: '#59B7FF',
       }
-    case 'Points':
+    case 'Points on Cards':
       return {
         borderColor: '#C084FC',
         pillBg: 'rgba(192, 132, 252, 0.14)',
@@ -68,6 +125,7 @@ function getSectionAccent(title: string) {
 }
 
 export default function ScoreScreen() {
+  const insets = useSafeAreaInsets()
   const params = useLocalSearchParams<{
     selectedSlug?: string
     sessionId?: string
@@ -76,13 +134,27 @@ export default function ScoreScreen() {
     guestName?: string
     guestEntryId?: string
     guestProfileId?: string
+    // Phase 3: scoring on behalf of an added registered player. The
+    // adder's auth.uid() lands as scored_by_user_id; addedUserId becomes
+    // owner_user_id (the linked player's profile).
+    addedUserId?: string
+    addedPlayerName?: string
+    addedPlayerId?: string
   }>()
+
+  const routeSessionId =
+    typeof params.sessionId === 'string' ? params.sessionId : ''
 
   const isGuestMode = params.guestMode === '1'
   const guestName = typeof params.guestName === 'string' ? params.guestName : ''
   const guestEntryId = typeof params.guestEntryId === 'string' ? params.guestEntryId : ''
   const guestProfileId = typeof params.guestProfileId === 'string' ? params.guestProfileId : ''
   const joinCode = typeof params.joinCode === 'string' ? params.joinCode : ''
+  const addedUserId =
+    typeof params.addedUserId === 'string' ? params.addedUserId : ''
+  const addedPlayerName =
+    typeof params.addedPlayerName === 'string' ? params.addedPlayerName : ''
+  const isAddedPlayerMode = !isGuestMode && Boolean(addedUserId)
 
   const dukeCards = useMemo(
     () => (cards as DukeCard[]).filter((card) => card.slug !== '00_duke'),
@@ -93,16 +165,43 @@ export default function ScoreScreen() {
     typeof params.selectedSlug === 'string' ? params.selectedSlug : null
 
   const [selectedSlug, setSelectedSlug] = useState<string | null>(initialSlug)
+  const [dukeQuery, setDukeQuery] = useState('')
   const [inputs, setInputs] = useState<ScoreInputs>(createEmptyInputs())
+  const [baselineSlug, setBaselineSlug] = useState<string | null>(initialSlug)
+  const [baselineInputs, setBaselineInputs] = useState<ScoreInputs>(createEmptyInputs())
+  const [effectiveSessionId, setEffectiveSessionId] = useState<string>(
+    routeSessionId || ''
+  )
   const [saving, setSaving] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
+  const [accountMenuVisible, setAccountMenuVisible] = useState(false)
+  const [resolvingSession, setResolvingSession] = useState(true)
   const [loadingExisting, setLoadingExisting] = useState(true)
+  const [loadError, setLoadError] = useState<string>('')
   const [isLocked, setIsLocked] = useState(false)
   const [lastSavedAt, setLastSavedAt] = useState<string>('')
+  const [saveFeedback, setSaveFeedback] = useState<{
+    title: string
+    body: string
+    actionLabel: string
+  } | null>(null)
+  const scoreScrollViewRef = useRef<ScrollView | null>(null)
+  const loadRequestIdRef = useRef(0)
+  const pendingScrollResetRef = useRef(false)
+  const scrollResetFrameRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null)
+  const previousLockStateRef = useRef<boolean | null>(null)
+  const autoRoutedToVictoryRef = useRef(false)
+  const didFocusRefreshRef = useRef(false)
+  const appStateRef = useRef(AppState.currentState)
 
   const selectedDuke = useMemo(() => {
     if (!selectedSlug) return null
     return dukeCards.find((card) => card.slug === selectedSlug) ?? null
   }, [dukeCards, selectedSlug])
+
+  const filteredDukeCards = useMemo(() => {
+    return filterDukesByQuery(dukeCards, dukeQuery)
+  }, [dukeCards, dukeQuery])
 
   const visibleStats = useMemo(() => {
     if (!selectedDuke) return []
@@ -110,12 +209,7 @@ export default function ScoreScreen() {
   }, [selectedDuke])
 
   const groupedStats = useMemo(() => {
-    return {
-      resources: visibleStats.filter((item) => item.section === 'resources'),
-      equipment: visibleStats.filter((item) => item.section === 'equipment'),
-      counts: visibleStats.filter((item) => item.section === 'counts'),
-      points: visibleStats.filter((item) => item.section === 'points'),
-    }
+    return groupScoreScreenStats(visibleStats)
   }, [visibleStats])
 
   const totalScore = useMemo(() => {
@@ -123,40 +217,166 @@ export default function ScoreScreen() {
     return calculateTotalScore(selectedDuke, inputs)
   }, [inputs, selectedDuke])
 
-  const loadExistingScore = useCallback(async () => {
-    try {
-      const routeSessionId =
-        typeof params.sessionId === 'string' ? params.sessionId : ''
-      const storedSessionId = await getActiveSessionId()
-      const sessionId = routeSessionId || storedSessionId || ''
+  const scoreActionVisibility = useMemo(
+    () => resolveScoreActionVisibility(selectedSlug),
+    [selectedSlug]
+  )
 
-      if (!sessionId) {
-        setLoadingExisting(false)
-        return
-      }
+  const isDirty = useMemo(() => {
+    return hasUnsavedScoreChanges({
+      selectedSlug,
+      baselineSlug,
+      inputs,
+      baselineInputs,
+    })
+  }, [baselineInputs, baselineSlug, inputs, selectedSlug])
 
-      const existing = await loadMyExistingScore(sessionId, {
+  const draftStorageKey = useMemo(
+    () =>
+      buildScoreDraftStorageKey({
+        sessionId: effectiveSessionId || routeSessionId,
         guestMode: isGuestMode,
         guestProfileId: guestProfileId || null,
         guestEntryId: guestEntryId || null,
-      })
+      }),
+    [
+      effectiveSessionId,
+      guestEntryId,
+      guestProfileId,
+      isGuestMode,
+      routeSessionId,
+    ]
+  )
 
-      if (existing) {
-        const normalized = normalizeScoreInputs(existing.inputs)
-        const nextSlug =
-          existing.duke_slug && dukeCards.some((d) => d.slug === existing.duke_slug)
-            ? existing.duke_slug
-            : initialSlug
+  const isWorking = resolvingSession || loadingExisting || saving
+  const isInteractionBlocked =
+    isLocked ||
+    isWorking ||
+    Boolean(loadError) ||
+    !effectiveSessionId
 
-        setSelectedSlug(nextSlug)
-        setInputs(normalized)
-        setLastSavedAt(existing.updated_at || '')
-        setIsLocked(Boolean(existing.game_locked))
+  const loadExistingScore = useCallback(async () => {
+    const requestId = loadRequestIdRef.current + 1
+    loadRequestIdRef.current = requestId
+
+    setResolvingSession(true)
+    setLoadingExisting(true)
+    setLoadError('')
+    setSaveFeedback(null)
+
+    try {
+      const storedSessionId = await getActiveSessionId()
+
+      if (loadRequestIdRef.current !== requestId) {
+        return
       }
-    } catch (err) {
+
+      const nextSessionId = resolveScoreSessionId(routeSessionId, storedSessionId)
+
+      setEffectiveSessionId(nextSessionId)
+
+      if (!nextSessionId) {
+        const empty = createEmptyInputs()
+
+        setSelectedSlug(initialSlug)
+        setInputs(empty)
+        setBaselineSlug(initialSlug)
+        setBaselineInputs(empty)
+        setLastSavedAt('')
+        setIsLocked(false)
+        return
+        }
+
+        // Defensive: if the locally-saved session id no longer points at a
+        // row in game_sessions, wipe the local active state and send the
+        // user back to /create-session instead of trying to score against
+        // a dead session.
+        const sessionStillLive = await doesSessionExist(nextSessionId)
+        if (!sessionStillLive) {
+          await clearActiveSessionState()
+          if (loadRequestIdRef.current !== requestId) return
+          Alert.alert(
+            'Session has ended',
+            'That session is no longer available. Start or join a new one to keep scoring.',
+            [
+              {
+                text: 'OK',
+                onPress: () => router.replace('/create-session'),
+              },
+            ]
+          )
+          return
+        }
+
+        const nextDraftStorageKey = buildScoreDraftStorageKey({
+          sessionId: nextSessionId,
+          guestMode: isGuestMode,
+          guestProfileId: guestProfileId || null,
+          guestEntryId: guestEntryId || null,
+        })
+
+        const [existing, sessionLockState, storedDraft] = await Promise.all([
+          loadMyExistingScore(nextSessionId, {
+            guestMode: isGuestMode,
+            guestProfileId: guestProfileId || null,
+            guestEntryId: guestEntryId || null,
+            addedUserId: isAddedPlayerMode ? addedUserId : null,
+          }),
+          loadSessionLockState(nextSessionId),
+          nextDraftStorageKey
+            ? AsyncStorage.getItem(nextDraftStorageKey)
+            : Promise.resolve(null),
+        ])
+
+        if (loadRequestIdRef.current !== requestId) {
+          return
+        }
+
+        const normalizedExisting = existing
+          ? {
+              selectedSlug:
+                existing.duke_slug && dukeCards.some((d) => d.slug === existing.duke_slug)
+                  ? existing.duke_slug
+                  : initialSlug,
+              inputs: normalizeScoreInputs(existing.inputs),
+              updatedAt: existing.updated_at || '',
+              isLocked: Boolean(existing.game_locked),
+            }
+          : null
+        const resolvedState = resolveLoadedScoreState({
+          initialSlug,
+          existingScore: normalizedExisting,
+          draft: parseStoredScoreDraft(storedDraft),
+          sessionFinished: isSessionFinished(
+            sessionLockState.totalEntries,
+            sessionLockState.lockedEntries
+          ),
+        })
+
+        setSelectedSlug(resolvedState.selectedSlug)
+        setInputs(resolvedState.inputs)
+        setBaselineSlug(resolvedState.baselineSlug)
+        setBaselineInputs(resolvedState.baselineInputs)
+        setLastSavedAt(resolvedState.lastSavedAt)
+        setIsLocked(resolvedState.isLocked)
+
+        if (nextDraftStorageKey && (normalizedExisting || resolvedState.isLocked)) {
+          void AsyncStorage.removeItem(nextDraftStorageKey).catch((error) => {
+            console.error('Failed to clear score draft after load.', error)
+          })
+        }
+      } catch (err: any) {
+        if (loadRequestIdRef.current !== requestId) {
+        return
+      }
+
       console.error(err)
+      setLoadError(err?.message ?? 'Failed to load the saved score.')
     } finally {
-      setLoadingExisting(false)
+      if (loadRequestIdRef.current === requestId) {
+        setResolvingSession(false)
+        setLoadingExisting(false)
+      }
     }
   }, [
     dukeCards,
@@ -164,15 +384,195 @@ export default function ScoreScreen() {
     guestProfileId,
     initialSlug,
     isGuestMode,
-    params.sessionId,
+      routeSessionId,
+    ])
+
+  useEffect(() => {
+    void loadExistingScore()
+  }, [loadExistingScore])
+
+  useEffect(() => {
+    previousLockStateRef.current = null
+    autoRoutedToVictoryRef.current = false
+    didFocusRefreshRef.current = false
+  }, [effectiveSessionId])
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!effectiveSessionId) {
+        return
+      }
+
+      if (!didFocusRefreshRef.current) {
+        didFocusRefreshRef.current = true
+        return
+      }
+
+      void loadExistingScore()
+    }, [effectiveSessionId, loadExistingScore])
+  )
+
+  const refreshScoreLockIfFinished = useCallback(async (errorContext: string) => {
+    if (!effectiveSessionId) {
+      return
+    }
+
+    try {
+      const sessionLockState = await loadSessionLockState(effectiveSessionId)
+
+      if (
+        !shouldRefreshScoreLockOnForeground({
+          sessionId: effectiveSessionId,
+          isLocked,
+          totalEntries: sessionLockState.totalEntries,
+          lockedEntries: sessionLockState.lockedEntries,
+        })
+      ) {
+        return
+      }
+
+      await loadExistingScore()
+    } catch (error) {
+      console.error(`Failed to refresh score lock state after ${errorContext}.`, error)
+    }
+  }, [effectiveSessionId, isLocked, loadExistingScore])
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (didAppBecomeActive(appStateRef.current, nextState)) {
+        void refreshScoreLockIfFinished('app foreground')
+      }
+
+      appStateRef.current = nextState
+    })
+
+    return () => {
+      subscription.remove()
+    }
+  }, [refreshScoreLockIfFinished])
+
+  useEffect(() => {
+    if (!effectiveSessionId) {
+      return
+    }
+
+    const unsubscribe = subscribeToSessionActivity(effectiveSessionId, () => {
+      void refreshScoreLockIfFinished('session activity')
+    })
+
+    return unsubscribe
+  }, [effectiveSessionId, refreshScoreLockIfFinished])
+
+  useEffect(() => {
+    if (!effectiveSessionId) {
+      return
+    }
+
+    return subscribeToSessionScores(effectiveSessionId, (payload) => {
+      if (
+        !shouldAutoRouteToVictoryOnLock({
+          sessionId: effectiveSessionId,
+          payload,
+          alreadyRouted: autoRoutedToVictoryRef.current,
+        })
+      ) {
+        return
+      }
+
+      autoRoutedToVictoryRef.current = true
+      router.replace(buildVictoryRoute(effectiveSessionId, joinCode) as never)
+    })
+  }, [effectiveSessionId, joinCode])
+
+  useEffect(() => {
+    if (!draftStorageKey || resolvingSession || loadingExisting) {
+      return
+    }
+
+    let cancelled = false
+
+    void (async () => {
+      try {
+        if (isLocked || !isDirty) {
+          await AsyncStorage.removeItem(draftStorageKey)
+          return
+        }
+
+        await AsyncStorage.setItem(
+          draftStorageKey,
+          JSON.stringify({
+            selectedSlug,
+            inputs,
+          })
+        )
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to persist score draft.', error)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    draftStorageKey,
+    inputs,
+    isDirty,
+    isLocked,
+    loadingExisting,
+    resolvingSession,
+    selectedSlug,
   ])
 
   useEffect(() => {
-    loadExistingScore()
-  }, [loadExistingScore])
+    return () => {
+      loadRequestIdRef.current += 1
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!effectiveSessionId) {
+      previousLockStateRef.current = null
+      autoRoutedToVictoryRef.current = false
+      return
+    }
+
+    const shouldRoute = shouldAutoRouteScoreToVictory({
+      sessionId: effectiveSessionId,
+      isLocked,
+      wasLocked: previousLockStateRef.current,
+      alreadyRouted: autoRoutedToVictoryRef.current,
+    })
+
+    previousLockStateRef.current = isLocked
+
+    if (!shouldRoute) {
+      return
+    }
+
+    autoRoutedToVictoryRef.current = true
+    router.replace(buildVictoryRoute(effectiveSessionId, joinCode) as never)
+  }, [effectiveSessionId, isLocked, joinCode])
+
+  const clearScoreDraft = useCallback(async () => {
+    if (!draftStorageKey) {
+      return
+    }
+
+    try {
+      await AsyncStorage.removeItem(draftStorageKey)
+    } catch (error) {
+      console.error('Failed to clear score draft.', error)
+    }
+  }, [draftStorageKey])
 
   function updateInput(key: StatKey, value: number) {
-    if (isLocked) return
+    if (isInteractionBlocked) return
+
+    if (saveFeedback) {
+      setSaveFeedback(null)
+    }
 
     setInputs((current) => ({
       ...current,
@@ -180,11 +580,178 @@ export default function ScoreScreen() {
     }))
   }
 
+  function confirmLeaveIfNeeded(action: () => void) {
+    if (saving) {
+      return
+    }
+
+    if (!isDirty || isLocked) {
+      action()
+      return
+    }
+
+      Alert.alert(
+        'Discard unsaved changes?',
+        'You have changes on this screen that have not been saved yet.',
+        [
+          { text: 'Stay', style: 'cancel' },
+          {
+            text: 'Leave',
+            style: 'destructive',
+            onPress: () => {
+              void clearScoreDraft().finally(action)
+            },
+          },
+        ]
+      )
+    }
+
+  function openCompare(replace = false) {
+    if (!effectiveSessionId) {
+      Alert.alert('Missing session', 'Start or join a session before continuing.')
+      return
+    }
+
+      const target = buildBottomNavRoute('/compare', {
+        sessionId: effectiveSessionId,
+        joinCode,
+        selectedSlug,
+        guestMode: isGuestMode ? '1' : '',
+        guestName: guestName || '',
+        guestProfileId: guestProfileId || '',
+        guestEntryId: guestEntryId || '',
+      })
+
+      if (replace) {
+        router.replace(target)
+        return
+    }
+
+    router.push(target)
+  }
+
+  const copyJoinCode = useCallback(async () => {
+    await copyJoinCodeWithFeedback(joinCode)
+  }, [joinCode])
+
+  // Saved status moved to a chip beside the page title — see the title-row
+  // render below — so the strip only carries Join Code / Entry / State now.
+  const contextItems = useMemo(
+    () => {
+      const items: Parameters<typeof SessionContextStrip>[0]['items'] = [
+        {
+          label: 'Entry',
+          value: isGuestMode ? 'Guest entry' : 'Player entry',
+          tone: 'default' as const,
+        },
+        {
+          label: 'State',
+          value: isLocked
+            ? sessionUiCopy.lockedState
+            : loadError
+            ? 'Needs retry'
+            : resolvingSession || loadingExisting
+            ? 'Loading'
+            : 'Open',
+          tone: isLocked
+            ? ('success' as const)
+            : loadError
+            ? ('warning' as const)
+            : ('default' as const),
+        },
+      ]
+      // Only include the join-code pill when a code actually exists — a
+      // string of dashes looks like a broken empty state.
+      if (joinCode) {
+        items.unshift({
+          label: sessionUiCopy.joinCodeLabel,
+          value: joinCode,
+          tone: 'accent' as const,
+          onPress: copyJoinCode,
+          showCopyIcon: true,
+        })
+      }
+      return items
+    },
+    [
+      copyJoinCode,
+      isGuestMode,
+      isLocked,
+      joinCode,
+      loadError,
+      loadingExisting,
+      resolvingSession,
+    ]
+  )
+
+  const savedStatusLabel = lastSavedAt
+    ? `Saved ${new Date(lastSavedAt).toLocaleDateString()}`
+    : 'Unsaved'
+
+  async function handleLogout() {
+    try {
+      setLoggingOut(true)
+      await logoutAndClearActiveSessionState({
+        signOut: () => supabase.auth.signOut(),
+        clearActiveSessionState,
+      })
+      router.replace('/')
+    } catch (err: any) {
+      Alert.alert('Logout failed', err?.message ?? 'Unknown error')
+    } finally {
+      setLoggingOut(false)
+    }
+  }
+
+  const accountMenuActions: ManageAccountModalAction[] = buildManageAccountMenuActions().map(
+    (action) => {
+      switch (action.id) {
+        case 'manageData':
+          return {
+            ...action,
+            onPress: () => confirmLeaveIfNeeded(() => router.push('/manage-data')),
+          }
+        case 'newSession':
+          return {
+            ...action,
+            onPress: () =>
+              confirmLeaveIfNeeded(() => router.replace('/create-session')),
+          }
+        case 'logout':
+          return {
+            ...action,
+            onPress: () => confirmLeaveIfNeeded(() => void handleLogout()),
+          }
+        case 'deleteSession':
+          return {
+            ...action,
+          }
+        case 'cancel':
+          return { ...action }
+        default:
+          return action
+      }
+    }
+  )
+
+  const openAccountActions = useCallback(() => {
+    setAccountMenuVisible(true)
+  }, [])
+  const handleBackNavigation = useCallback(() => {
+    performSafeBackNavigation({
+      canGoBack: router.canGoBack(),
+      back: () => router.back(),
+      replace: (href) => router.replace(href),
+    })
+  }, [])
+
   function confirmReset() {
     if (isLocked) {
       Alert.alert('Game finished', 'This score is locked because the game has already been finished.')
       return
     }
+
+    if (isInteractionBlocked) return
 
     if (!hasAnyInput(inputs)) {
       setInputs(createEmptyInputs())
@@ -199,20 +766,79 @@ export default function ScoreScreen() {
         {
           text: 'Clear',
           style: 'destructive',
-          onPress: () => setInputs(createEmptyInputs()),
+          onPress: () => {
+            setSaveFeedback(null)
+            setInputs(createEmptyInputs())
+          },
         },
       ]
     )
   }
 
+  function confirmChangeDuke() {
+    if (isInteractionBlocked) return
+
+    if (!selectedDuke) {
+      setSelectedSlug(null)
+      setDukeQuery('')
+      return
+    }
+
+    if (!isDirty && !hasAnyInput(inputs)) {
+      setSelectedSlug(null)
+      setDukeQuery('')
+      return
+    }
+
+    Alert.alert(
+      'Change duke?',
+      'Changing duke will keep you on this screen, but your current unsaved scoring choices may no longer match.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Change',
+          style: 'destructive',
+          onPress: () => {
+            setSaveFeedback(null)
+            setSelectedSlug(null)
+            setDukeQuery('')
+            setInputs(createEmptyInputs())
+          },
+        },
+      ]
+    )
+  }
+
+  function handleSelectDuke(slug: string) {
+    pendingScrollResetRef.current = shouldResetScoreScrollOnDukeSelection(selectedSlug, slug)
+    setSelectedSlug(slug)
+    setDukeQuery('')
+  }
+
+  const handleScoreAreaLayout = useCallback((event: LayoutChangeEvent) => {
+    if (!pendingScrollResetRef.current) {
+      return
+    }
+
+    pendingScrollResetRef.current = false
+    const nextScrollTarget = resolveScoreScrollResetTarget(event.nativeEvent.layout.y)
+
+    if (scrollResetFrameRef.current !== null) {
+      cancelAnimationFrame(scrollResetFrameRef.current)
+    }
+
+    scrollResetFrameRef.current = requestAnimationFrame(() => {
+      scoreScrollViewRef.current?.scrollTo({
+        y: nextScrollTarget,
+        animated: true,
+      })
+      scrollResetFrameRef.current = null
+    })
+  }, [])
+
   async function handleSaveScore() {
     try {
-      const routeSessionId =
-        typeof params.sessionId === 'string' ? params.sessionId : ''
-      const storedSessionId = await getActiveSessionId()
-      const sessionId = routeSessionId || storedSessionId || ''
-
-      if (!sessionId) {
+      if (!effectiveSessionId) {
         Alert.alert('Missing session', 'Start or join a session before scoring.')
         router.replace('/')
         return
@@ -228,11 +854,33 @@ export default function ScoreScreen() {
         return
       }
 
+      // Defensive: the session_scores -> game_sessions FK will fail with a
+      // cryptic constraint error if the session has been deleted out from
+      // under us. Verify the session still exists first so we can hand back
+      // a clear "session ended" message and clear the stale local state.
+      const sessionStillLive = await doesSessionExist(effectiveSessionId)
+      if (!sessionStillLive) {
+        await clearActiveSessionState()
+        Alert.alert(
+          'Session has ended',
+          'That session is no longer available. Start or join a new one to keep scoring.',
+          [
+            {
+              text: 'OK',
+              onPress: () => router.replace('/create-session'),
+            },
+          ]
+        )
+        return
+      }
+
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
       setSaving(true)
 
       let ownerUserId: string | null = null
-      if (isGuestMode) {
+      let scoredByUserId: string | null = null
+
+      if (isGuestMode || isAddedPlayerMode) {
         const {
           data: { user },
           error: userError,
@@ -242,30 +890,40 @@ export default function ScoreScreen() {
           throw new Error('User not authenticated')
         }
 
-        ownerUserId = user.id
+        if (isAddedPlayerMode) {
+          // owner_user_id = the linked player; scored_by_user_id = me
+          ownerUserId = addedUserId
+          scoredByUserId = user.id
+        } else {
+          ownerUserId = user.id
+        }
       }
 
-      await saveMyScore(sessionId, selectedDuke.slug, inputs, totalScore, {
+      await saveMyScore(effectiveSessionId, selectedDuke.slug, inputs, totalScore, {
         guestMode: isGuestMode,
         guestName: guestName || null,
         guestProfileId: guestProfileId || null,
         guestEntryId: guestEntryId || null,
         ownerUserId,
+        scoredByUserId,
+        addedPlayerName: isAddedPlayerMode ? addedPlayerName || null : null,
         lockScore: false,
         includedInStats: false,
       })
 
       const now = new Date().toISOString()
-      setIsLocked(false)
-      setLastSavedAt(now)
-
-      router.replace({
-        pathname: '/compare',
-        params: {
-          sessionId,
-          joinCode,
-        },
-      })
+        setIsLocked(false)
+        setLastSavedAt(now)
+        setBaselineSlug(selectedDuke.slug)
+        setBaselineInputs(inputs)
+        void clearScoreDraft()
+        setSaveFeedback(
+          buildScoreSaveFeedback({
+            isGuestMode,
+          guestName,
+          dukeName: selectedDuke.name,
+        })
+      )
     } catch (err: any) {
       Alert.alert('Save failed', err?.message ?? 'Unknown error')
     } finally {
@@ -277,6 +935,7 @@ export default function ScoreScreen() {
     if (!items.length || !selectedDuke) return null
 
     const accent = getSectionAccent(title)
+    const sectionHeaderMeta = getScoreSectionHeaderMeta({ isLocked })
 
     return (
       <View
@@ -284,22 +943,30 @@ export default function ScoreScreen() {
           styles.sectionCard,
           {
             borderColor: accent.borderColor,
-            shadowColor: accent.glow,
           },
         ]}
       >
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>{title}</Text>
-          <View
-            style={[
-              styles.sectionBadge,
-              {
-                backgroundColor: accent.pillBg,
-                borderColor: accent.borderColor,
-              },
-            ]}
-          >
-            <Text style={styles.sectionBadgeText}>{items.length}</Text>
+
+          <View style={styles.sectionHeaderRight}>
+            {sectionHeaderMeta.hintText ? (
+              <View style={styles.sectionTipChip}>
+                <Text style={styles.sectionTipChipText}>
+                  {sectionHeaderMeta.hintText}
+                </Text>
+              </View>
+            ) : null}
+
+            {sectionHeaderMeta.showCountBadge ? (
+              <CountBadge
+                value={items.length}
+                size="sm"
+                backgroundColor={accent.borderColor}
+                borderColor={accent.borderColor}
+                textColor="#FFFFFF"
+              />
+            ) : null}
           </View>
         </View>
 
@@ -312,7 +979,7 @@ export default function ScoreScreen() {
               value={inputs[stat.key]}
               onChange={(value) => updateInput(stat.key, value)}
               icon={stat.icon}
-              disabled={isLocked}
+              disabled={isInteractionBlocked}
             />
           ))}
         </View>
@@ -321,86 +988,129 @@ export default function ScoreScreen() {
   }
 
   return (
-    <ScrollView
-      style={styles.screen}
-      contentContainerStyle={styles.content}
-      keyboardShouldPersistTaps="handled"
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={styles.topBar}>
-        <View style={styles.headerCompact}>
-          <Text style={styles.pageTitle}>{isGuestMode ? 'Guest Score' : 'Score'}</Text>
-          <Text style={styles.pageSubtitle}>
-            {isGuestMode && guestName ? guestName : 'Choose duke, enter values, then save'}
-          </Text>
-        </View>
-
-        {joinCode ? (
-          <View style={styles.joinPill}>
-            <Text style={styles.joinPillLabel}>Code</Text>
-            <Text style={styles.joinPillValue}>{joinCode}</Text>
+    <>
+      <ScrollView
+        ref={scoreScrollViewRef}
+        style={styles.screen}
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingTop: getBottomNavTopClearance(insets.top, 'score'),
+            paddingBottom: insets.bottom + 24,
+          },
+        ]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.titleRow}>
+          <View style={styles.titleTextWrap}>
+            <Text style={styles.titleText}>
+              {isGuestMode
+                ? 'Guest Score'
+                : isAddedPlayerMode
+                  ? 'Player Score'
+                  : 'Score'}
+            </Text>
+            {(isGuestMode && guestName) || (isAddedPlayerMode && addedPlayerName) ? (
+              <Text style={styles.titleSubtitle}>
+                {isGuestMode && guestName ? guestName : addedPlayerName}
+              </Text>
+            ) : null}
           </View>
-        ) : null}
-      </View>
 
-      {selectedDuke ? (
-        <View style={styles.heroCard}>
-          {cardImages[selectedDuke.slug] ? (
-            <Image
-              source={cardImages[selectedDuke.slug]}
-              style={styles.heroImage}
-              resizeMode="cover"
-            />
-          ) : null}
-
-          <View style={styles.heroOverlay}>
-            <View style={styles.heroTopRow}>
-              <View style={styles.heroTitleWrap}>
-                <Text style={styles.heroKicker}>
-                  {isGuestMode ? 'Guest entry' : 'Score entry'}
-                </Text>
-                <Text style={styles.heroTitle}>{selectedDuke.name}</Text>
-              </View>
-
-              <View style={styles.heroMiniTotal}>
-                <Text style={styles.heroMiniTotalLabel}>Live total</Text>
-                <Text style={styles.heroMiniTotalValue}>{totalScore}</Text>
-              </View>
-            </View>
-
-            <View style={styles.heroMetaRow}>
-              <View style={styles.heroMetaChip}>
-                <Text style={styles.heroMetaText}>{isLocked ? 'Locked' : 'Not Locked Yet'}</Text>
-              </View>
-
-              {lastSavedAt ? (
-                <View style={styles.heroMetaChip}>
-                  <Text style={styles.heroMetaText}>
-                    Saved {new Date(lastSavedAt).toLocaleDateString()}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
+          {/* Saved/unsaved chip — replaces the old full-width SAVED banner. */}
+          <View
+            style={[
+              styles.savedChip,
+              lastSavedAt ? styles.savedChipSaved : styles.savedChipUnsaved,
+            ]}
+          >
+            <Text
+              style={[
+                styles.savedChipText,
+                lastSavedAt ? styles.savedChipTextSaved : styles.savedChipTextUnsaved,
+              ]}
+              numberOfLines={1}
+            >
+              {savedStatusLabel}
+            </Text>
           </View>
         </View>
-      ) : (
-        <View style={styles.emptyHero}>
-          <Text style={styles.emptyHeroKicker}>Valeria score</Text>
-          <Text style={styles.emptyHeroTitle}>Choose a Duke to Start</Text>
-          <Text style={styles.emptyHeroText}>
-            Pick your duke first, then the scoring rows will appear automatically.
-          </Text>
-        </View>
-      )}
 
-      {loadingExisting ? (
+      <SessionContextStrip items={contextItems} />
+
+      {saveFeedback ? (
+        <View style={styles.successCard}>
+          <Text style={styles.successTitle}>{saveFeedback.title}</Text>
+          <Text style={styles.successText}>{saveFeedback.body}</Text>
+
+          <View style={styles.inlineButtons}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.primaryInlineButton,
+                styles.successActionButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => openCompare(false)}
+            >
+              <Text style={styles.successActionButtonText}>{saveFeedback.actionLabel}</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {resolvingSession || loadingExisting ? (
         <View style={styles.statusCard}>
           <Text style={styles.statusTitle}>Loading saved score...</Text>
           <Text style={styles.statusText}>
-            Checking whether this player already submitted a score.
+            Checking session details and any score that was already submitted.
           </Text>
         </View>
-      ) : isLocked ? (
+      ) : null}
+
+      {!resolvingSession && !loadingExisting && !effectiveSessionId ? (
+        <View style={styles.errorCard}>
+          <Text style={styles.errorTitle}>Missing session</Text>
+          <Text style={styles.errorText}>
+            Start or join a session before entering scores.
+          </Text>
+
+          <View style={styles.inlineButtons}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.primaryInlineButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => router.replace('/')}
+            >
+              <Text style={styles.primaryInlineButtonText}>Go Home</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {!resolvingSession && !loadingExisting && !!loadError ? (
+        <View style={styles.errorCard}>
+          <Text style={styles.errorTitle}>Couldn’t load saved score</Text>
+          <Text style={styles.errorText}>{loadError}</Text>
+
+          <View style={styles.inlineButtons}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.primaryInlineButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => {
+                void loadExistingScore()
+              }}
+            >
+              <Text style={styles.primaryInlineButtonText}>Retry</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {!resolvingSession && !loadingExisting && isLocked ? (
         <View style={styles.lockCard}>
           <View style={styles.lockHeader}>
             <View>
@@ -413,26 +1123,17 @@ export default function ScoreScreen() {
             </View>
 
             <View style={styles.lockChip}>
-              <Text style={styles.lockChipText}>Locked</Text>
+              <Text style={styles.lockChipText}>{sessionUiCopy.lockedState}</Text>
             </View>
           </View>
 
-          <View style={styles.lockButtons}>
+          <View style={styles.inlineButtons}>
             <Pressable
               style={({ pressed }) => [
                 styles.primaryInlineButton,
                 pressed && styles.buttonPressed,
               ]}
-              onPress={() =>
-                router.replace({
-                  pathname: '/compare',
-                  params: {
-                    sessionId:
-                      typeof params.sessionId === 'string' ? params.sessionId : '',
-                    joinCode,
-                  },
-                })
-              }
+              onPress={() => openCompare(true)}
             >
               <Text style={styles.primaryInlineButtonText}>View Results</Text>
             </Pressable>
@@ -441,26 +1142,51 @@ export default function ScoreScreen() {
       ) : null}
 
       <View
-        pointerEvents={isLocked ? 'none' : 'auto'}
-        style={isLocked ? styles.lockedBlock : undefined}
+        pointerEvents={isInteractionBlocked ? 'none' : 'auto'}
+        style={isInteractionBlocked ? styles.lockedBlock : undefined}
+        onLayout={handleScoreAreaLayout}
       >
         {!selectedDuke ? (
           <View style={styles.sectionCard}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Choose Duke</Text>
+              <CountBadge value={filteredDukeCards.length} size="sm" />
             </View>
 
+            <View style={styles.dukeSearchCard}>
+              <TextInput
+                style={styles.dukeSearchInput}
+                value={dukeQuery}
+                onChangeText={setDukeQuery}
+                placeholder="Search dukes"
+                placeholderTextColor={theme.colors.textMuted}
+                autoCorrect={false}
+                returnKeyType="search"
+              />
+            </View>
+
+            {filteredDukeCards.length === 0 ? (
+              <View style={styles.emptySearchState}>
+                <Text style={styles.emptySearchTitle}>No dukes match that search.</Text>
+                <Text style={styles.emptySearchText}>Try a different name or clear the query.</Text>
+              </View>
+            ) : null}
+
             <DukePicker
-              dukes={dukeCards.map((duke) => ({
+              dukes={filteredDukeCards.map((duke) => ({
                 slug: duke.slug,
                 name: duke.name,
               }))}
               selectedSlug={selectedSlug}
-              onSelect={setSelectedSlug}
+              onSelect={handleSelectDuke}
             />
           </View>
         ) : (
           <View style={styles.selectedDukeCard}>
+            <Text style={styles.selectedLabel}>
+              {isGuestMode ? 'Guest entry' : 'Score entry'}
+            </Text>
+
             <View style={styles.selectedDukeTop}>
               <View style={styles.dukeThumbWrap}>
                 {cardImages[selectedDuke.slug] ? (
@@ -477,58 +1203,98 @@ export default function ScoreScreen() {
               </View>
 
               <View style={styles.selectedDukeMeta}>
-                <Text style={styles.selectedLabel}>Selected duke</Text>
-                <Text style={styles.selectedName}>{selectedDuke.name}</Text>
+                <View style={styles.selectedNameRow}>
+                  <Text style={styles.selectedName} numberOfLines={2}>
+                    {selectedDuke.name}
+                  </Text>
+                  {/* Live total inlined as a number-and-label pair beside the
+                      duke name — replaces the old separate Live Total pill. */}
+                  <View style={styles.selectedLiveTotal}>
+                    <Text style={styles.selectedLiveTotalLabel}>
+                      {sessionUiCopy.liveTotalLabel}
+                    </Text>
+                    <Text style={styles.selectedLiveTotalValue}>{totalScore}</Text>
+                  </View>
+                </View>
                 <Text style={styles.selectedRuleHint}>
                   Only relevant scoring rows are shown for this duke.
                 </Text>
-
-                {!isLocked ? (
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.changeDukeButton,
-                      pressed && styles.buttonPressed,
-                    ]}
-                    onPress={() => setSelectedSlug(null)}
-                  >
-                    <Text style={styles.changeDukeButtonText}>Change Duke</Text>
-                  </Pressable>
-                ) : null}
               </View>
             </View>
+
+            {!isLocked ? (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.changeDukeButton,
+                  pressed && styles.buttonPressed,
+                ]}
+                onPress={confirmChangeDuke}
+              >
+                <Text style={styles.changeDukeButtonText}>Change Duke</Text>
+              </Pressable>
+            ) : null}
           </View>
         )}
 
         {renderSection('Resources', groupedStats.resources)}
-        {renderSection('Equipment', groupedStats.equipment)}
+        {renderSection('Symbols', groupedStats.equipment)}
+        {renderSection('Monster Symbols', groupedStats.monsterSymbols)}
         {renderSection('Counts', groupedStats.counts)}
-        {renderSection('Points', groupedStats.points)}
+        {renderSection('Points on Cards', groupedStats.points)}
       </View>
 
       <View style={styles.totalShell}>
-        <ScoreTotal
-          total={totalScore}
-          subtitle={selectedDuke ? selectedDuke.name : 'No duke selected'}
-        />
+        {scoreActionVisibility.showTotalCard ? (
+          <ScoreTotal
+            total={totalScore}
+            savedState={
+              isLocked
+                ? 'locked'
+                : lastSavedAt
+                  ? 'saved'
+                  : 'unsaved'
+            }
+            savedAtLabel={
+              lastSavedAt
+                ? `saved ${new Date(lastSavedAt).toLocaleDateString()}`
+                : undefined
+            }
+          />
+        ) : null}
 
         {!isLocked ? (
+          // Bordered button sitting on the banner background — no white fill,
+          // so the primary action reads as part of the Total Score panel.
+          // Renamed to "Save & Compare" so it does both jobs and the standalone
+          // Compare button below can go away.
           <Pressable
             style={({ pressed }) => [
-              styles.calculateButton,
+              styles.saveCompareButton,
+              !scoreActionVisibility.showTotalCard && styles.saveCompareButtonCompact,
               pressed && styles.buttonPressed,
-              (saving || loadingExisting || !selectedDuke) && styles.buttonDisabled,
+              (isWorking || !selectedDuke || !effectiveSessionId || !!loadError) &&
+                styles.buttonDisabled,
             ]}
-            onPress={handleSaveScore}
-            disabled={saving || loadingExisting || !selectedDuke}
+            onPress={async () => {
+              await handleSaveScore()
+              if (effectiveSessionId) {
+                openCompare(false)
+              }
+            }}
+            disabled={isWorking || !selectedDuke || !effectiveSessionId || !!loadError}
           >
-            <Text style={styles.calculateButtonText}>
-              {!selectedDuke
-                ? 'Select Duke'
-                : saving
-                ? 'Saving...'
-                : isGuestMode
-                ? 'Save Guest Score'
-                : 'Save My Score'}
+            <Text style={styles.saveCompareButtonText}>
+              {!effectiveSessionId
+                ? 'Missing Session'
+                : !selectedDuke
+                  ? 'Select Duke'
+                  : saving
+                    ? 'Saving…'
+                    : resolvingSession || loadingExisting
+                      ? 'Loading…'
+                      : isGuestMode
+                        ? 'Save Guest Score & Compare'
+                        : 'Save & Compare'}
             </Text>
           </Pressable>
         ) : (
@@ -540,22 +1306,53 @@ export default function ScoreScreen() {
         )}
       </View>
 
-      <View style={styles.footerButtons}>
+      {/* Demoted Clear / Back to small text links — they're rarely-used
+          escape hatches and don't deserve full-width buttons. */}
+      <View style={styles.footerLinks}>
         <Pressable
-          style={({ pressed }) => [styles.footerGhostButton, pressed && styles.buttonPressed]}
+          style={({ pressed }) => [pressed && styles.buttonPressed]}
           onPress={confirmReset}
+          disabled={isInteractionBlocked}
+          hitSlop={6}
         >
-          <Text style={styles.footerGhostButtonText}>Clear</Text>
+          <Text
+            style={[
+              styles.footerLinkText,
+              isInteractionBlocked && styles.footerLinkTextDisabled,
+            ]}
+          >
+            Clear
+          </Text>
         </Pressable>
 
+        <Text style={styles.footerLinkSeparator}>·</Text>
+
         <Pressable
-          style={({ pressed }) => [styles.footerGhostButton, pressed && styles.buttonPressed]}
-          onPress={() => router.back()}
+          style={({ pressed }) => [pressed && styles.buttonPressed]}
+          onPress={() => confirmLeaveIfNeeded(handleBackNavigation)}
+          disabled={saving}
+          hitSlop={6}
         >
-          <Text style={styles.footerGhostButtonText}>Back</Text>
+          <Text
+            style={[
+              styles.footerLinkText,
+              saving && styles.footerLinkTextDisabled,
+            ]}
+          >
+            Back
+          </Text>
         </Pressable>
       </View>
-    </ScrollView>
+      </ScrollView>
+
+      <ManageAccountModal
+        visible={accountMenuVisible}
+        title={manageAccountAlertCopy.title}
+        message={manageAccountAlertCopy.message}
+        actions={accountMenuActions}
+        onRequestClose={() => setAccountMenuVisible(false)}
+      />
+    </>
   )
 }
 
@@ -566,197 +1363,98 @@ const styles = StyleSheet.create({
   },
 
   content: {
-    padding: 12,
-    paddingBottom: 28,
+    padding: 10,
+    paddingBottom: 16,
   },
 
-  topBar: {
+  titleRow: {
     flexDirection: 'row',
-    alignItems: 'stretch',
-    gap: 8,
-    marginBottom: 12,
-  },
-
-  headerCompact: {
-    flex: 1,
-    backgroundColor: theme.colors.surfaceAlt,
-    borderRadius: theme.radius.xl ?? theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    ...theme.shadow.card,
-  },
-
-  pageTitle: {
-    color: theme.colors.text,
-    fontSize: 24,
-    fontWeight: '900',
-    marginBottom: 2,
-  },
-
-  pageSubtitle: {
-    color: theme.colors.textMuted ?? '#B8A8D4',
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '700',
-  },
-
-  joinPill: {
-    minWidth: 100,
-    backgroundColor: theme.colors.surfaceAlt,
-    borderRadius: theme.radius.xl ?? theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.accent,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    justifyContent: 'center',
-    ...theme.shadow.card,
-  },
-
-  joinPillLabel: {
-    color: theme.colors.textMuted ?? '#A99BC8',
-    fontSize: 10,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-
-  joinPillValue: {
-    color: theme.colors.text,
-    fontSize: 18,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
-
-  heroCard: {
-    height: 220,
-    borderRadius: 22,
-    overflow: 'hidden',
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    backgroundColor: theme.colors.surfaceAlt,
-    shadowColor: '#A78BFA',
-    shadowOpacity: 0.16,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 4,
-  },
-
-  heroImage: {
-    width: '100%',
-    height: '100%',
-    position: 'absolute',
-  },
-
-  heroOverlay: {
-    flex: 1,
-    justifyContent: 'space-between',
-    padding: 16,
-    backgroundColor: 'rgba(8, 5, 18, 0.52)',
-  },
-
-  heroTopRow: {
-    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
+    marginBottom: 10,
   },
 
-  heroTitleWrap: {
+  titleTextWrap: {
     flex: 1,
     minWidth: 0,
-    justifyContent: 'flex-end',
   },
 
-  heroKicker: {
-    color: '#E9DEFF',
-    fontSize: 11,
-    fontWeight: '700',
-    marginBottom: 6,
-  },
-
-  heroTitle: {
-    color: '#FFF',
-    fontSize: 24,
-    lineHeight: 28,
+  titleText: {
+    color: theme.colors.text,
+    fontSize: 26,
     fontWeight: '900',
   },
 
-  heroMiniTotal: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(20, 15, 31, 0.86)',
-    borderWidth: 1,
-    borderColor: '#C4B5FD',
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    minWidth: 92,
-  },
-
-  heroMiniTotalLabel: {
-    color: '#D8CDED',
-    fontSize: 10,
+  titleSubtitle: {
+    color: theme.colors.textSecondary,
+    fontSize: 13,
     fontWeight: '700',
-    marginBottom: 2,
+    marginTop: 2,
   },
 
-  heroMiniTotalValue: {
-    color: '#FFF',
-    fontSize: 24,
-    fontWeight: '900',
-    textAlign: 'right',
-  },
-
-  heroMetaRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-
-  heroMetaChip: {
-    backgroundColor: 'rgba(20, 15, 31, 0.82)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-    borderRadius: 999,
+  // Saved/unsaved chip beside the page title. Replaces the old full-width
+  // "SAVED / Not saved yet" banner.
+  savedChip: {
     paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    maxWidth: 160,
   },
 
-  heroMetaText: {
-    color: '#F3EEFF',
+  savedChipSaved: {
+    backgroundColor: 'rgba(112, 215, 165, 0.16)',
+    borderColor: theme.colors.success,
+  },
+
+  savedChipUnsaved: {
+    backgroundColor: 'rgba(231, 199, 104, 0.14)',
+    borderColor: theme.colors.gold,
+  },
+
+  savedChipText: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '900',
+    letterSpacing: 0.4,
   },
 
-  emptyHero: {
+  savedChipTextSaved: {
+    color: theme.colors.success,
+  },
+
+  savedChipTextUnsaved: {
+    color: theme.colors.gold,
+  },
+
+  joinCodePill: {
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     backgroundColor: theme.colors.surfaceAlt,
-    borderRadius: 22,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    padding: 18,
-    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    marginBottom: 10,
     ...theme.shadow.card,
   },
 
-  emptyHeroKicker: {
-    color: theme.colors.textMuted ?? '#B8A8D4',
-    fontSize: 11,
-    fontWeight: '700',
-    marginBottom: 8,
+  joinCodePillLabel: {
+    color: theme.colors.textMuted ?? '#A99BC8',
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
 
-  emptyHeroTitle: {
-    color: theme.colors.text,
-    fontSize: 24,
+  joinCodePillText: {
+    color: theme.colors.accent,
+    fontSize: 12,
     fontWeight: '900',
-    marginBottom: 6,
-  },
-
-  emptyHeroText: {
-    color: theme.colors.textSecondary ?? theme.colors.textMuted,
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: '700',
+    letterSpacing: 1,
   },
 
   statusCard: {
@@ -768,6 +1466,30 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
 
+  successCard: {
+    backgroundColor: 'rgba(112, 215, 165, 0.1)',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: theme.colors.success,
+    padding: 14,
+    marginBottom: 12,
+    ...theme.shadow.card,
+  },
+
+  successTitle: {
+    color: theme.colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+
+  successText: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 18,
+  },
+
   statusTitle: {
     color: theme.colors.text,
     fontSize: 15,
@@ -776,6 +1498,30 @@ const styles = StyleSheet.create({
   },
 
   statusText: {
+    color: theme.colors.textMuted ?? '#B8A8D4',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
+  },
+
+  errorCard: {
+    backgroundColor: theme.colors.surfaceAlt,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+    padding: 14,
+    marginBottom: 12,
+    ...theme.shadow.card,
+  },
+
+  errorTitle: {
+    color: theme.colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+
+  errorText: {
     color: theme.colors.textMuted ?? '#B8A8D4',
     fontSize: 12,
     fontWeight: '700',
@@ -827,7 +1573,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  lockButtons: {
+  inlineButtons: {
     flexDirection: 'row',
     gap: 8,
     marginTop: 12,
@@ -848,6 +1594,17 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
+  successActionButton: {
+    backgroundColor: theme.colors.success,
+  },
+
+  successActionButtonText: {
+    color: theme.colors.background,
+    fontSize: 13,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+
   lockedBlock: {
     opacity: 0.55,
   },
@@ -856,13 +1613,11 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceAlt,
     borderRadius: 22,
     borderWidth: 1,
+    // Tightened to 10/8 (down from earlier 14/12) so the page feels less padded
+    // without losing the section grouping.
     padding: 10,
-    marginBottom: 12,
+    marginBottom: 8,
     ...theme.shadow.card,
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 5,
   },
 
   sectionHeader: {
@@ -872,26 +1627,77 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
 
-  sectionTitle: {
-    color: theme.colors.text,
-    fontSize: 17,
-    fontWeight: '900',
+  sectionHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
 
-  sectionBadge: {
-    minWidth: 28,
-    height: 28,
+  // Compact tip chip rendered in the first section's header.
+  sectionTipChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
     borderRadius: 999,
     borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 8,
+    borderColor: theme.colors.border,
+    backgroundColor: 'rgba(255,255,255,0.04)',
   },
 
-  sectionBadgeText: {
-    color: '#FFF',
-    fontSize: 12,
+  sectionTipChipText: {
+    color: theme.colors.textMuted ?? theme.colors.textSecondary,
+    fontSize: 10,
     fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+
+  dukeSearchCard: {
+    backgroundColor: theme.colors.surfaceRaised,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 10,
+    marginBottom: 12,
+  },
+
+  dukeSearchInput: {
+    backgroundColor: theme.colors.backgroundAlt,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    color: theme.colors.text,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+
+  emptySearchState: {
+    backgroundColor: theme.colors.surfaceRaised,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 12,
+    marginBottom: 12,
+  },
+
+  emptySearchTitle: {
+    color: theme.colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+
+  emptySearchText: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+
+  sectionTitle: {
+    color: theme.colors.text,
+    fontSize: 16,
+    fontWeight: '900',
   },
 
   sectionRows: {
@@ -901,7 +1707,7 @@ const styles = StyleSheet.create({
   selectedDukeCard: {
     backgroundColor: theme.colors.surfaceAlt,
     borderRadius: 22,
-    padding: 12,
+    padding: 10,
     borderWidth: 1,
     borderColor: theme.colors.borderAccent ?? theme.colors.accent,
     marginBottom: 12,
@@ -910,14 +1716,17 @@ const styles = StyleSheet.create({
 
   selectedDukeTop: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 12,
+    marginTop: 6,
   },
 
+  // Square (rounded-corner) card thumb — kept square here and matched on the
+  // tier list so duke art looks consistent across the app.
   dukeThumbWrap: {
     width: 108,
     height: 108,
-    borderRadius: 18,
+    borderRadius: 14,
     overflow: 'hidden',
     backgroundColor: theme.colors.backgroundAlt,
     borderWidth: 1,
@@ -927,6 +1736,36 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 0 },
     elevation: 3,
+  },
+
+  // Live total inlined beside the duke name — no separate Live Total pill.
+  selectedNameRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 6,
+  },
+
+  selectedLiveTotal: {
+    alignItems: 'flex-end',
+    minWidth: 60,
+  },
+
+  selectedLiveTotalLabel: {
+    color: theme.colors.textMuted ?? '#C5B7E2',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+
+  selectedLiveTotalValue: {
+    color: theme.colors.text,
+    fontSize: 24,
+    lineHeight: 26,
+    fontWeight: '900',
+    marginTop: 1,
   },
 
   dukeThumb: {
@@ -956,22 +1795,28 @@ const styles = StyleSheet.create({
     color: theme.colors.textMuted ?? '#A99BC8',
     fontSize: 10,
     fontWeight: '700',
-    marginBottom: 3,
+    marginBottom: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
   },
 
   selectedName: {
     color: theme.colors.text,
     fontSize: 20,
     fontWeight: '900',
-    marginBottom: 6,
+    flex: 1,
+    minWidth: 0,
   },
 
+  // Italic, muted caption — used to be primary-weight body text that was
+  // competing with the duke name. Now it reads as a tiny aside.
   selectedRuleHint: {
-    color: theme.colors.textSecondary ?? theme.colors.textMuted,
-    fontSize: 12,
-    fontWeight: '700',
-    lineHeight: 17,
-    marginBottom: 10,
+    color: theme.colors.textMuted ?? theme.colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '600',
+    fontStyle: 'italic',
+    lineHeight: 15,
+    opacity: 0.85,
   },
 
   changeDukeButton: {
@@ -1001,18 +1846,28 @@ const styles = StyleSheet.create({
     ...theme.shadow.card,
   },
 
-  calculateButton: {
+  // Bordered primary button on top of the Total Score banner background —
+  // no white fill so it nests inside the banner instead of competing with it.
+  saveCompareButton: {
     marginTop: 12,
-    backgroundColor: theme.colors.accent,
-    borderRadius: 18,
-    paddingVertical: 15,
-    ...theme.shadow.glow,
+    backgroundColor: 'rgba(0, 0, 0, 0.18)',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.55)',
+    paddingVertical: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  calculateButtonText: {
-    color: theme.colors.background,
+  saveCompareButtonCompact: {
+    marginTop: 0,
+  },
+
+  saveCompareButtonText: {
+    color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '900',
+    letterSpacing: 0.3,
     textAlign: 'center',
   },
 
@@ -1036,26 +1891,31 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  footerButtons: {
+  // Demoted Clear / Back as small text links beneath the primary action.
+  footerLinks: {
     flexDirection: 'row',
-    gap: 10,
-    marginBottom: 4,
-  },
-
-  footerGhostButton: {
-    flex: 1,
-    backgroundColor: theme.colors.surfaceRaised,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 10,
+    marginTop: 6,
+    marginBottom: 10,
   },
 
-  footerGhostButtonText: {
-    color: theme.colors.textSecondary ?? theme.colors.text,
-    fontSize: 13,
-    fontWeight: '900',
+  footerLinkText: {
+    color: theme.colors.textMuted ?? theme.colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
+  },
+
+  footerLinkTextDisabled: {
+    opacity: 0.45,
+  },
+
+  footerLinkSeparator: {
+    color: theme.colors.textMuted ?? theme.colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+    opacity: 0.6,
   },
 })

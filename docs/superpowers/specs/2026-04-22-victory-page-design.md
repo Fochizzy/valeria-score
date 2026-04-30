@@ -16,7 +16,7 @@ When the host taps `Finish Game` from `Compare`, the app should:
 ## Existing Context
 
 - `Finish Game` currently lives in `app/compare.tsx`.
-- That action already calls `finalizeGameStats(sessionId)` and then refreshes compare data.
+- That action now finishes the session through the shared session-admin RPC helper and then refreshes compare data.
 - `Compare` already knows how to load ranked score rows including `placement` and `is_winner`.
 - The current compare UI already has a `leader` concept, share behavior, and per-entry leaderboard cards.
 - The app already uses routed screens for major flow transitions, so a dedicated `Victory` route fits the current structure better than a one-off alert.
@@ -37,7 +37,7 @@ Included:
 
 Excluded:
 
-- changing how `finalizeGameStats` computes placements or winners
+- changing how the finish-game RPC computes placements or winners
 - redesigning the full `Compare` screen
 - auto-redirecting every already-finished compare visit into `Victory`
 - adding trophies, achievements, or persistent celebration history
@@ -48,7 +48,7 @@ Excluded:
 
 ### Route and Flow
 
-After `finalizeGameStats` succeeds, `app/compare.tsx` should stop showing the completion alert and instead navigate to:
+After the finish-game RPC succeeds, `app/compare.tsx` should stop showing the completion alert and instead navigate to:
 
 - `/victory?sessionId=<id>&joinCode=<code>`
 

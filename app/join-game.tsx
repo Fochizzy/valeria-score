@@ -1,258 +1,247 @@
-import { useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import {
-  View,
+  ImageBackground,
+  Pressable,
+  ScrollView,
+  StyleSheet,
   Text,
   TextInput,
-  Pressable,
-  StyleSheet,
-  Alert,
-  Image,
-  ScrollView,
+  View,
 } from 'react-native'
-import { router } from 'expo-router'
-import * as Clipboard from 'expo-clipboard'
+import { useRouter } from 'expo-router'
+
+import ValeriaHeader from '../components/ValeriaHeader'
 import { joinSessionByCode } from '../lib/sessions'
+import { Alert } from '../lib/themed-alert'
 
-const logo = require('../assets/valeria_logo.jpeg')
-
-const normalizeJoinCode = (value: string) =>
-  value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6)
+const citizenBackdrop = require('../assets/Citizen Backdrop.png')
 
 export default function JoinGameScreen() {
+  const router = useRouter()
   const [joinCode, setJoinCode] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const normalizedCode = useMemo(() => normalizeJoinCode(joinCode), [joinCode])
-  const canJoin = normalizedCode.length === 6 && !loading
+  const normalizedCode = useMemo(
+    () => joinCode.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 6),
+    [joinCode]
+  )
 
-  const handlePaste = async () => {
-    try {
-      const clipboardText = await Clipboard.getStringAsync()
-      setJoinCode(normalizeJoinCode(clipboardText || ''))
-    } catch {
-      Alert.alert('Paste failed', 'Unable to read from clipboard.')
+  async function handleJoin() {
+    if (normalizedCode.length !== 6) {
+      Alert.alert('Invalid code', 'Enter the 6-character join code.')
+      return
     }
-  }
 
-  const handleJoin = async () => {
     try {
-      if (!normalizedCode) {
-        Alert.alert('Missing code', 'Enter a join code first.')
-        return
-      }
-
-      if (normalizedCode.length !== 6) {
-        Alert.alert('Invalid code', 'Join codes must be 6 characters.')
-        return
-      }
-
       setLoading(true)
 
       const session = await joinSessionByCode(normalizedCode)
 
+      if (!session?.id) {
+        Alert.alert('Game not found', 'No session matches that join code.')
+        return
+      }
+
       router.replace({
-        pathname: '/session/[id]',
+        pathname: '/score',
         params: {
-          id: String(session.id),
-          joinCode: String(session.join_code ?? normalizedCode),
+          sessionId: String(session.id),
+          joinCode: String(session.join_code),
         },
       })
-    } catch (err: any) {
-      Alert.alert('Join game failed', err?.message ?? 'Unknown error')
+    } catch (error: any) {
+      Alert.alert('Unable to join', error?.message ?? 'Please try again.')
     } finally {
       setLoading(false)
     }
   }
 
+  function handlePasteClean(value: string) {
+    setJoinCode(value.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 6))
+  }
+
   return (
-    <ScrollView contentContainerStyle={styles.content} style={styles.container}>
-      <View style={styles.heroCard}>
-        <View style={styles.logoFrame}>
-          <Image source={logo} style={styles.logo} resizeMode="contain" />
-        </View>
+    <ImageBackground
+      source={citizenBackdrop}
+      style={styles.pageBackground}
+      imageStyle={styles.pageBackgroundImage}
+      resizeMode="cover"
+    >
+      <View style={styles.pageScrim}>
+        <ScrollView
+          style={styles.container}
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <ValeriaHeader
+            compact
+            showBack
+            title="Join Game"
+            subtitle="Enter a 6-character code"
+          />
 
-        <Text style={styles.kicker}>Enter a Hosted Table</Text>
-        <Text style={styles.title}>Join Game</Text>
-        <Text style={styles.subtitle}>
-          Paste or type the host&apos;s 6-character join code to enter the same scoring table.
-        </Text>
-      </View>
-
-      <View style={styles.formCard}>
-        <Text style={styles.label}>Join Code</Text>
-
-        <TextInput
-          placeholder="ABC123"
-          placeholderTextColor="#A79BC9"
-          value={normalizedCode}
-          onChangeText={(text) => setJoinCode(normalizeJoinCode(text))}
-          style={styles.input}
-          autoCapitalize="characters"
-          autoCorrect={false}
-          autoComplete="off"
-          maxLength={6}
-          textAlign="center"
-        />
-
-        <View style={styles.buttonRow}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.secondaryButton,
-              pressed && styles.pressed,
-            ]}
-            onPress={handlePaste}
-            disabled={loading}
-          >
-            <Text style={styles.secondaryButtonText}>Paste Code</Text>
-          </Pressable>
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.button,
-              pressed && styles.pressed,
-              (!canJoin || loading) && styles.disabled,
-            ]}
-            onPress={handleJoin}
-            disabled={!canJoin}
-          >
-            <Text style={styles.buttonText}>
-              {loading ? 'Joining...' : 'Join Session'}
+          <View style={styles.heroCard}>
+            <Text style={styles.kicker}>Session Entry</Text>
+            <Text style={styles.heroTitle}>Reconnect To A Table</Text>
+            <Text style={styles.heroSubtitle}>
+              Enter a 6-character join code to jump back into a live Valeria session.
             </Text>
-          </Pressable>
-        </View>
+          </View>
 
-        <Text style={styles.helper}>
-          Spaces and symbols are removed automatically.
-        </Text>
+          <View style={styles.formCard}>
+            <Text style={styles.label}>Join Code</Text>
+
+            <TextInput
+              value={normalizedCode}
+              onChangeText={handlePasteClean}
+              placeholder="Enter 6-character code"
+              placeholderTextColor="#8E7FA8"
+              autoCapitalize="characters"
+              autoCorrect={false}
+              maxLength={6}
+              style={styles.input}
+              returnKeyType="done"
+              onSubmitEditing={handleJoin}
+            />
+
+            <View style={styles.buttonRow}>
+              <Pressable
+                style={[styles.secondaryButton]}
+                onPress={() => setJoinCode('')}
+                disabled={loading}
+              >
+                <Text style={styles.secondaryButtonText}>Clear</Text>
+              </Pressable>
+
+              <Pressable
+                style={[
+                  styles.primaryButton,
+                  (loading || normalizedCode.length !== 6) && styles.buttonDisabled,
+                ]}
+                onPress={handleJoin}
+                disabled={loading || normalizedCode.length !== 6}
+              >
+                <Text style={styles.primaryButtonText}>
+                  {loading ? 'Joining...' : 'Join'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </ScrollView>
       </View>
-    </ScrollView>
+    </ImageBackground>
   )
 }
 
 const styles = StyleSheet.create({
+  pageBackground: {
+    flex: 1,
+    backgroundColor: '#120F1C',
+  },
+  pageBackgroundImage: {
+    opacity: 1,
+  },
+  pageScrim: {
+    flex: 1,
+    backgroundColor: 'rgba(10, 15, 30, 0.76)',
+  },
   container: {
     flex: 1,
-    backgroundColor: '#140F1F',
+    backgroundColor: 'transparent',
   },
   content: {
-    padding: 20,
-    justifyContent: 'center',
-    flexGrow: 1,
+    padding: 12,
+    paddingBottom: 24,
   },
   heroCard: {
-    backgroundColor: '#1E152C',
-    borderRadius: 24,
-    padding: 22,
-    alignItems: 'center',
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#4F3A72',
-  },
-  logoFrame: {
-    width: 180,
-    height: 108,
     borderRadius: 18,
-    backgroundColor: '#2A1E3E',
     borderWidth: 1,
-    borderColor: '#9272D8',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 14,
-    padding: 8,
-  },
-  logo: {
-    width: 150,
-    height: 84,
+    borderColor: '#302544',
+    marginBottom: 12,
+    backgroundColor: 'rgba(26, 22, 40, 0.68)',
+    padding: 14,
   },
   kicker: {
-    color: '#BCAEE0',
+    color: '#CDBDFA',
     fontSize: 11,
     fontWeight: '900',
-    textTransform: 'uppercase',
     letterSpacing: 1,
-    marginBottom: 4,
+    textTransform: 'uppercase',
+    marginBottom: 6,
   },
-  title: {
+  heroTitle: {
     color: '#FFF8FF',
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: '900',
-    textAlign: 'center',
-    marginBottom: 8,
+    marginBottom: 6,
   },
-  subtitle: {
-    color: '#CFC3E8',
-    textAlign: 'center',
-    lineHeight: 21,
-    fontSize: 14,
+  heroSubtitle: {
+    color: '#D7CAEF',
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '700',
   },
   formCard: {
-    backgroundColor: '#1E152C',
-    borderRadius: 24,
-    padding: 18,
+    backgroundColor: 'rgba(26, 22, 40, 0.68)',
     borderWidth: 1,
-    borderColor: '#4F3A72',
+    borderColor: '#302544',
+    borderRadius: 18,
+    padding: 12,
   },
   label: {
-    color: '#E6D8FF',
+    color: '#F4EEFF',
     fontSize: 14,
-    fontWeight: '900',
+    fontWeight: '800',
     marginBottom: 8,
   },
   input: {
-    backgroundColor: '#180F23',
-    color: '#FFFFFF',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 16,
-    marginBottom: 16,
+    backgroundColor: '#221C33',
+    color: '#F4EEFF',
     borderWidth: 1,
-    borderColor: '#5A4380',
-    letterSpacing: 4,
-    fontSize: 24,
-    fontWeight: '900',
+    borderColor: '#3C3054',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 2,
+    textAlign: 'center',
   },
   buttonRow: {
+    marginTop: 12,
     flexDirection: 'row',
     gap: 10,
-    marginBottom: 10,
+  },
+  primaryButton: {
+    flex: 1,
+    backgroundColor: '#E7DDFF',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  primaryButtonText: {
+    color: '#120F1C',
+    fontSize: 14,
+    fontWeight: '800',
   },
   secondaryButton: {
-    backgroundColor: '#2A1E3E',
-    borderRadius: 16,
+    width: 96,
+    backgroundColor: '#221C33',
     borderWidth: 1,
-    borderColor: '#6A4D98',
-    paddingVertical: 16,
-    paddingHorizontal: 14,
+    borderColor: '#3C3054',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   secondaryButtonText: {
-    color: '#E2D4FF',
-    fontSize: 15,
-    fontWeight: '900',
-    textAlign: 'center',
+    color: '#F4EEFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
-  button: {
-    flex: 1,
-    backgroundColor: '#7046C9',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#AF92F5',
-    paddingVertical: 16,
-  },
-  buttonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-  helper: {
-    color: '#9F90C4',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  pressed: {
-    opacity: 0.92,
-  },
-  disabled: {
-    opacity: 0.6,
+  buttonDisabled: {
+    opacity: 0.5,
   },
 })

@@ -50,7 +50,13 @@ app-example
 .expo-check/
 .gradle-home/
 .gradle-home-build2/
+.gradle-home-verify/
 supabase/.temp/
+supabase/supabase/
 expo-log.txt
 expo-devclient.log
 tmp-*
+
+# Claude / AI agent artifacts
+.agents/
+skills-lock.json

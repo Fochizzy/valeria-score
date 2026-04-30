@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Valeria Scoring Account Deletion</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+      line-height: 1.6;
+      color: #222;
+    }
+    h1 {
+      color: #1a73e8;
+    }
+    .box {
+      background: #f5f5f5;
+      padding: 16px;
+      border-radius: 8px;
+      margin: 20px 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>Valeria Scoring Account Deletion Request</h1>
+
+  <p>
+    Valeria Scoring users may request deletion of their account and associated account data.
+  </p>
+
+  <div class="box">
+    <h2>How to request account deletion</h2>
+    <p>
+      To request deletion of your Valeria Scoring account, please email us at:
+    </p>
+    <p>
+      <strong>izzy.hodnett@gmail.com</strong>
+    </p>
+    <p>
+      Use the subject line:
+      <strong>Valeria Scoring Account Deletion Request</strong>
+    </p>
+    <p>
+      Please include the email address or username associated with your Valeria Scoring account
+      so we can identify your account.
+    </p>
+  </div>
+
+  <h2>Data that will be deleted</h2>
+  <p>
+    When your request is processed, we will delete your account and associated personal data,
+    including username, password credentials, profile information, and app account data associated
+    with your account.
+  </p>
+
+  <h2>Data that may be retained</h2>
+  <p>
+    Some data may be retained only where required for legal, security, fraud prevention,
+    accounting, or regulatory purposes. Any retained data will be kept only for as long as
+    necessary for those purposes.
+  </p>
+
+  <h2>Processing time</h2>
+  <p>
+    Account deletion requests are typically processed within 30 days.
+  </p>
+</body>
+</html>

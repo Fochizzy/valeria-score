@@ -67,24 +67,11 @@ export default function DukePicker({
                   </Text>
                 </View>
 
-                selectedBadge: {
-  position: 'absolute',
-  top: 8,
-  right: 8,
-  backgroundColor: 'rgba(139,92,246,0.92)',
-  borderWidth: 1,
-  borderColor: '#E6DAFF',
-  paddingHorizontal: 8,
-  paddingVertical: 4,
-  borderRadius: theme.radius.pill,
-},
-
-selectedBadgeText: {
-  color: '#FFF',
-  fontSize: 10,
-  fontWeight: '900',
-  letterSpacing: 0.4,
-},
+                {isSelected ? (
+                  <View style={styles.selectedBadge}>
+                    <Text style={styles.selectedBadgeText}>Selected</Text>
+                  </View>
+                ) : null}
               </View>
             </Pressable>
           )
@@ -116,7 +103,7 @@ const styles = StyleSheet.create({
 
   cardSelected: {
     transform: [{ scale: 1.02 }],
-    ...theme.shadow.glowStrong,
+    ...theme.shadow.glow,
   },
 
   cardMuted: {
@@ -160,7 +147,7 @@ const styles = StyleSheet.create({
   },
 
   imageFallbackText: {
-    color: theme.colors.textMuted ?? '#B8A8D4',
+    color: theme.colors.textMuted,
     fontSize: 11,
     lineHeight: 16,
     textAlign: 'center',

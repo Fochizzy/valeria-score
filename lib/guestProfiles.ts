@@ -1,5 +1,6 @@
+import { prepareGuestProfileCreationInput } from './guest-profile-creation'
+import { normalizePlayerId } from './player-id'
 import { supabase } from './supabase'
-import { normalizePlayerId } from './profile'
 
 export type GuestProfile = {
   id: string
@@ -10,8 +11,13 @@ export type GuestProfile = {
 }
 
 type CreateSharedGuestProfileArgs = {
-  displayName: string
+  displayName?: string | null
   publicPlayerId: string
+}
+
+type LegacyCreateGuestProfileArgs = {
+  display_name?: string | null
+  player_id: string
 }
 
 export async function getGuestProfileByPlayerId(
@@ -34,19 +40,53 @@ export async function getGuestProfileByPlayerId(
   return (data as GuestProfile | null) ?? null
 }
 
+export async function searchGuestProfiles(query: string): Promise<{
+  id: string
+  display_name: string
+  player_id: string | null
+}[]> {
+  const normalizedQuery = query.trim()
+
+  if (!normalizedQuery) return []
+
+  const normalizedPlayerId = normalizePlayerId(normalizedQuery)
+
+  let request = supabase
+    .from('guest_profiles')
+    .select('id, display_name, public_player_id')
+    .order('display_name', { ascending: true })
+    .limit(12)
+
+  if (normalizedPlayerId) {
+    request = request.or(
+      `display_name.ilike.%${normalizedQuery}%,public_player_id.ilike.%${normalizedPlayerId}%`
+    )
+  } else {
+    request = request.ilike('display_name', `%${normalizedQuery}%`)
+  }
+
+  const { data, error } = await request
+
+  if (error) throw error
+
+  return ((data ?? []) as {
+    id: string
+    display_name: string
+    public_player_id: string | null
+  }[]).map((row) => ({
+    id: row.id,
+    display_name: row.display_name,
+    player_id: row.public_player_id,
+  }))
+}
+
 export async function createSharedGuestProfile(
   args: CreateSharedGuestProfileArgs
 ): Promise<GuestProfile> {
-  const displayName = args.displayName.trim()
-  const publicPlayerId = normalizePlayerId(args.publicPlayerId)
-
-  if (!displayName) {
-    throw new Error('Missing player name')
-  }
-
-  if (!publicPlayerId) {
-    throw new Error('Missing Player ID')
-  }
+  const { displayName, playerId: publicPlayerId } = prepareGuestProfileCreationInput({
+    displayName: args.displayName,
+    playerId: args.publicPlayerId,
+  })
 
   const {
     data: { user },
@@ -77,4 +117,28 @@ export async function createSharedGuestProfile(
   }
 
   return data as GuestProfile
+}
+
+export async function createGuestProfile(
+  args: LegacyCreateGuestProfileArgs
+): Promise<{
+  id: string
+  display_name: string
+  player_id: string
+}> {
+  const prepared = prepareGuestProfileCreationInput({
+    displayName: args.display_name ?? null,
+    playerId: args.player_id,
+  })
+
+  const created = await createSharedGuestProfile({
+    displayName: prepared.displayName,
+    publicPlayerId: prepared.playerId,
+  })
+
+  return {
+    id: created.id,
+    display_name: created.display_name,
+    player_id: created.public_player_id,
+  }
 }
