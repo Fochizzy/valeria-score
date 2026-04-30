@@ -34,7 +34,6 @@ yarn-error.*
 .env
 .env.*
 !.env.example
-credentials.json
 
 # typescript
 *.tsbuildinfo
@@ -46,11 +45,9 @@ credentials.json
 # misc
 app-example
 
-# local verification artifacts
-.expo-check/
+# local build caches
 .gradle-home/
 .gradle-home-build2/
-supabase/.temp/
-expo-log.txt
-expo-devclient.log
-tmp-*
+
+# Include the local Expo env file in EAS uploads for builds started on this machine.
+!.env

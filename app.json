@@ -6,9 +6,16 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0A0F1E"
+    },
     "plugins": [
       "expo-router",
-      "expo-font"
+      "expo-font",
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true
@@ -17,10 +24,21 @@
       "**/*"
     ],
     "android": {
-      "package": "com.example.valeriascore"
+      "package": "com.fochizzy87.valeriascore",
+      "versionCode": 1,
+      "icon": "./assets/icon.png",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#0A0F1E"
+      }
     },
     "ios": {
-      "bundleIdentifier": "com.example.valeriascore"
+      "bundleIdentifier": "com.fochizzy.valeriascore",
+      "buildNumber": "1",
+      "icon": "./assets/icon.png"
+    },
+    "web": {
+      "favicon": "./assets/icon.png"
     },
     "extra": {
       "router": {},
