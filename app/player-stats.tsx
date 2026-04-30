@@ -1,290 +1,326 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ActivityIndicator,
-  Image,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native'
-import { supabase } from '../lib/supabase'
+import { router } from 'expo-router'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+
+import AnalyticsSegmentedControl from '../components/AnalyticsSegmentedControl'
+import DukeVsGlobalCard from '../components/DukeVsGlobalCard'
+import FinishDistributionCard from '../components/FinishDistributionCard'
+import FrequentOpponentsCard from '../components/FrequentOpponentsCard'
+import HeadToHeadCard from '../components/HeadToHeadCard'
+import ManageAccountModal from '../components/ManageAccountModal'
+import PercentileGroupCard from '../components/PercentileGroupCard'
+import PlayerCountFilterChips from '../components/PlayerCountFilterChips'
+import PlayerLeaderboardSection from '../components/PlayerLeaderboardSection'
+import PlayerSelectedStatsSection from '../components/PlayerSelectedStatsSection'
+import PlayerCategoryBreakdownCard from '../components/PlayerCategoryBreakdownCard'
+import PlayerStatsHeroCard from '../components/PlayerStatsHeroCard'
+import { playerStatsSurface } from '../constants/analyticsPageSurface'
 import { theme } from '../constants/theme'
+import { Alert } from '../lib/themed-alert'
 import { cards } from '../data/cards'
-import { cardImages } from '../data/cardImages'
+import {
+  analyticsRouteHrefByKey,
+  buildAnalyticsRouteToggleSegments,
+} from '../lib/analytics-route-toggle'
+import { filterDukesByQuery } from '../lib/duke-search'
+import {
+  buildBoundManageAccountMenuActions,
+  manageAccountAlertCopy,
+  manageAccountHeaderProps,
+} from '../lib/manage-account-menu'
+import { logoutAndClearActiveSessionState } from '../lib/logout'
+import { loadFrequentOpponents } from '../lib/frequent-opponents-fetch'
+import type { FrequentOpponent } from '../lib/frequent-opponents'
+import { loadPlayerExtras, type PlayerExtras } from '../lib/player-extras-fetch'
+import { type FinishDistribution } from '../lib/finish-distribution'
+import {
+  buildDukeVsGlobalRows,
+  type DukeVsGlobalRow,
+  type GlobalDukeRowSlim,
+} from '../lib/duke-vs-global'
+import {
+  computePercentileResult,
+  type PercentileResult,
+} from '../lib/percentile-vs-global'
+import type { PlayerCountFilter } from '../lib/player-count-filter'
+import {
+  buildProtectedAnalyticsAccessState,
+  resolveProtectedAnalyticsViewerUserId,
+} from '../lib/protected-analytics-access'
+import { filterPlayers } from '../lib/player-stats-aggregates'
+import {
+  getPlayerStatsViewNames,
+  resolvePlayerDukeRows,
+  resolvePlayerLeaderboardRows,
+  type PlayerDukeRow,
+  type PlayerLeaderboardRow,
+  type PlayerStatsTimeWindow,
+} from '../lib/player-stats-data'
+import { getBottomNavTopClearance } from '../lib/bottom-nav-layout'
+import { loadPlayerCategoryStats } from '../lib/player-category-fetch'
+import type { PlayerCategoryStats } from '../lib/score-category-breakdown'
+import {
+  deriveSelectedPlayerInsights,
+} from '../lib/player-stats-insights'
+import { clearActiveSessionState } from '../lib/sessions'
+import { supabase } from '../lib/supabase'
+import ValeriaHeader from '../components/ValeriaHeader'
 
-type TimeWindow = 'all' | '30d'
-
-type ScoreRow = {
-  user_id: string | null
-  owner_user_id: string | null
-  guest_name: string | null
-  guest_profile_id: string | null
-  is_guest: boolean | null
-  duke_slug: string | null
-  total_score: number
-  placement: number | null
-  is_winner: boolean | null
-  included_in_stats: boolean | null
-  updated_at: string
-}
-
-type ProfileRow = {
-  id: string
-  display_name: string | null
-  public_player_id: string | null
-}
-
-type GuestProfileRow = {
-  id: string
-  display_name: string
-  public_player_id: string
-}
-
-type PlayerAggregate = {
-  player_key: string
-  player_name: string
-  public_player_id: string | null
-  player_type: 'user' | 'guest'
-  games_played: number
-  wins: number
-  avg_score: number
-  avg_finish: number
-}
-
-type PlayerDukeAggregate = {
-  duke_slug: string
-  games_played: number
-  wins: number
-  avg_score: number
-  avg_finish: number
-}
-
-function formatDukeName(slug: string) {
-  const card = cards.find((item) => item.slug === slug)
-  if (card?.name) return card.name
-
-  return slug
-    .split('_')
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ')
-}
-
-function getPlayerEntityKey(row: ScoreRow) {
-  if (row.is_guest && row.guest_profile_id) return `guest:${row.guest_profile_id}`
-  if (row.user_id) return `user:${row.user_id}`
-  return null
-}
+type TimeWindow = PlayerStatsTimeWindow
 
 export default function PlayerStatsScreen() {
+  const insets = useSafeAreaInsets()
+  const { width } = useWindowDimensions()
   const [query, setQuery] = useState('')
+  const [dukeQuery, setDukeQuery] = useState('')
   const [timeWindow, setTimeWindow] = useState<TimeWindow>('all')
   const [dukeFilter, setDukeFilter] = useState<string>('all')
   const [loading, setLoading] = useState(true)
+  const [selectedStatsLoading, setSelectedStatsLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [allPlayers, setAllPlayers] = useState<PlayerLeaderboardRow[]>([])
+  const [playerDukeStats, setPlayerDukeStats] = useState<PlayerDukeRow[]>([])
+  const [playerCategoryStats, setPlayerCategoryStats] = useState<PlayerCategoryStats | null>(null)
+  const [categoryStatsLoading, setCategoryStatsLoading] = useState(false)
+  const [frequentOpponents, setFrequentOpponents] = useState<FrequentOpponent[]>([])
+  const [frequentOpponentsLoading, setFrequentOpponentsLoading] = useState(false)
+  const [playerExtras, setPlayerExtras] = useState<PlayerExtras | null>(null)
+  const [playerExtrasLoading, setPlayerExtrasLoading] = useState(false)
+  const [globalDukeRows, setGlobalDukeRows] = useState<GlobalDukeRowSlim[]>([])
+  const [playerCountFilter, setPlayerCountFilter] = useState<PlayerCountFilter>('all')
+  const [selectedStatsAnchorY, setSelectedStatsAnchorY] = useState<number | null>(null)
+  const screenScrollRef = useRef<ScrollView | null>(null)
+  const didDefaultSelectRef = useRef(false)
+  const [selectedPlayerKey, setSelectedPlayerKey] = useState<string | null>(null)
+  const [accountMenuVisible, setAccountMenuVisible] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
+  const [viewerUserId, setViewerUserId] = useState<string | null | undefined>(undefined)
+  const didLoadOnceRef = useRef(false)
 
-  const [players, setPlayers] = useState<PlayerAggregate[]>([])
-  const [selectedPlayer, setSelectedPlayer] = useState<PlayerAggregate | null>(null)
-  const [playerDukeStats, setPlayerDukeStats] = useState<PlayerDukeAggregate[]>([])
+  const dukeOptions = useMemo(
+    () =>
+      cards
+        .filter((card) => card.slug !== '00_duke')
+        .map((card) => ({ slug: card.slug, name: card.name })),
+    []
+  )
+  const accessState = useMemo(
+    () =>
+      viewerUserId === undefined
+        ? null
+        : buildProtectedAnalyticsAccessState('/player-stats', viewerUserId),
+    [viewerUserId]
+  )
+  const analyticsRouteSegments = useMemo(
+    () => buildAnalyticsRouteToggleSegments('players'),
+    []
+  )
 
-  const dukeOptions = useMemo(() => cards.map((card) => card.slug), [])
+  const loadLeaderboard = useCallback(async () => {
+    const { leaderboardView, dukeView } = getPlayerStatsViewNames(timeWindow)
+    const sourceView = dukeFilter === 'all' ? leaderboardView : dukeView
 
-  async function loadData() {
     setLoading(true)
+    setLoadError('')
+
     try {
-      const cutoff =
-        timeWindow === '30d'
-          ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-          : null
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession()
 
-      let scoresQuery = supabase
-        .from('player_scores')
-        .select(
-          'user_id, owner_user_id, guest_name, guest_profile_id, is_guest, duke_slug, total_score, placement, is_winner, included_in_stats, updated_at'
-        )
-        .eq('included_in_stats', true)
+      if (sessionError) throw sessionError
 
-      if (cutoff) {
-        scoresQuery = scoresQuery.gte('updated_at', cutoff)
+      const nextViewerUserId = resolveProtectedAnalyticsViewerUserId(session)
+      setViewerUserId(nextViewerUserId)
+
+      if (!nextViewerUserId) {
+        setAllPlayers([])
+        setPlayerDukeStats([])
+        setSelectedPlayerKey(null)
+        return
       }
+
+      let leaderboardQuery = supabase
+        .from(sourceView)
+        .select('*')
+        .order('wins', { ascending: false })
+        .order('avg_score', { ascending: false })
+        .order('avg_finish', { ascending: true })
 
       if (dukeFilter !== 'all') {
-        scoresQuery = scoresQuery.eq('duke_slug', dukeFilter)
+        leaderboardQuery = leaderboardQuery.eq('duke_slug', dukeFilter)
       }
 
-      const [
-        { data: scoreRows, error: scoreError },
-        { data: profileRows, error: profileError },
-        { data: guestRows, error: guestError },
-      ] = await Promise.all([
-        scoresQuery,
-        supabase.from('profiles').select('id, display_name, public_player_id'),
-        supabase.from('guest_profiles').select('id, display_name, public_player_id'),
-      ])
+      const { data, error } = await leaderboardQuery
 
-      if (scoreError) throw scoreError
-      if (profileError) throw profileError
-      if (guestError) throw guestError
+      if (error) throw error
 
-      const safeScores = (scoreRows ?? []) as ScoreRow[]
-      const safeProfiles = (profileRows ?? []) as ProfileRow[]
-      const safeGuests = (guestRows ?? []) as GuestProfileRow[]
-
-      const profileMap = new Map<string, ProfileRow>(
-        safeProfiles.map((profile) => [profile.id, profile])
-      )
-
-      const guestMap = new Map<string, GuestProfileRow>(
-        safeGuests.map((guest) => [guest.id, guest])
-      )
-
-      const grouped = new Map<
-        string,
-        {
-          player_type: 'user' | 'guest'
-          player_name: string
-          public_player_id: string | null
-          totalScore: number
-          totalFinish: number
-          wins: number
-          games: number
-        }
-      >()
-
-      for (const row of safeScores) {
-        const entityKey = getPlayerEntityKey(row)
-        if (!entityKey) continue
-
-        const current = grouped.get(entityKey) ?? {
-          player_type: row.is_guest ? 'guest' : 'user',
-          player_name: 'Player',
-          public_player_id: null,
-          totalScore: 0,
-          totalFinish: 0,
-          wins: 0,
-          games: 0,
-        }
-
-        if (row.is_guest && row.guest_profile_id) {
-          const guest = guestMap.get(row.guest_profile_id)
-          current.player_type = 'guest'
-          current.player_name = guest?.display_name || row.guest_name || 'Guest Player'
-          current.public_player_id = guest?.public_player_id || null
-        } else if (row.user_id) {
-          const profile = profileMap.get(row.user_id)
-          current.player_type = 'user'
-          current.player_name =
-            profile?.display_name || profile?.public_player_id || 'Player'
-          current.public_player_id = profile?.public_player_id || null
-        }
-
-        current.games += 1
-        current.totalScore += Number(row.total_score ?? 0)
-        current.totalFinish += Number(row.placement ?? 0)
-        if (row.is_winner) current.wins += 1
-
-        grouped.set(entityKey, current)
-      }
-
-      let nextPlayers: PlayerAggregate[] = [...grouped.entries()].map(
-        ([playerKey, aggregate]) => ({
-          player_key: playerKey,
-          player_name: aggregate.player_name,
-          public_player_id: aggregate.public_player_id,
-          player_type: aggregate.player_type,
-          games_played: aggregate.games,
-          wins: aggregate.wins,
-          avg_score: aggregate.games ? aggregate.totalScore / aggregate.games : 0,
-          avg_finish: aggregate.games ? aggregate.totalFinish / aggregate.games : 0,
-        })
-      )
-
-      const normalizedQuery = query.trim().toUpperCase()
-      if (normalizedQuery) {
-        nextPlayers = nextPlayers.filter(
-          (player) =>
-            (player.public_player_id ?? '').toUpperCase().includes(normalizedQuery) ||
-            player.player_name.toUpperCase().includes(normalizedQuery)
-        )
-      }
-
-      nextPlayers.sort((a, b) => {
-        if (b.wins !== a.wins) return b.wins - a.wins
-        if (b.avg_score !== a.avg_score) return b.avg_score - a.avg_score
-        return a.avg_finish - b.avg_finish
-      })
-
-      setPlayers(nextPlayers)
-
-      if (selectedPlayer) {
-        const selectedRows = safeScores.filter((row) => {
-          const entityKey = getPlayerEntityKey(row)
-          return entityKey === selectedPlayer.player_key
-        })
-
-        const dukeGrouped = new Map<
-          string,
-          {
-            totalScore: number
-            totalFinish: number
-            wins: number
-            games: number
-          }
-        >()
-
-        for (const row of selectedRows) {
-          const dukeSlug = row.duke_slug ?? 'unknown'
-          const current = dukeGrouped.get(dukeSlug) ?? {
-            totalScore: 0,
-            totalFinish: 0,
-            wins: 0,
-            games: 0,
-          }
-
-          current.games += 1
-          current.totalScore += Number(row.total_score ?? 0)
-          current.totalFinish += Number(row.placement ?? 0)
-          if (row.is_winner) current.wins += 1
-
-          dukeGrouped.set(dukeSlug, current)
-        }
-
-        const nextDukeStats: PlayerDukeAggregate[] = [...dukeGrouped.entries()]
-          .map(([duke_slug, aggregate]) => ({
-            duke_slug,
-            games_played: aggregate.games,
-            wins: aggregate.wins,
-            avg_score: aggregate.games ? aggregate.totalScore / aggregate.games : 0,
-            avg_finish: aggregate.games ? aggregate.totalFinish / aggregate.games : 0,
-          }))
-          .sort((a, b) => {
-            if (b.wins !== a.wins) return b.wins - a.wins
-            if (b.avg_score !== a.avg_score) return b.avg_score - a.avg_score
-            return a.avg_finish - b.avg_finish
-          })
-
-        setPlayerDukeStats(nextDukeStats)
-      } else {
-        setPlayerDukeStats([])
-      }
+      setAllPlayers(resolvePlayerLeaderboardRows((data ?? []) as PlayerLeaderboardRow[]))
+      didLoadOnceRef.current = true
+    } catch (err: any) {
+      console.error(err)
+      setLoadError(err?.message ?? 'Unable to load player analytics right now. Pull to retry.')
     } finally {
       setLoading(false)
     }
-  }
+  }, [dukeFilter, timeWindow])
+
+  const players = useMemo(() => filterPlayers(allPlayers, query), [allPlayers, query])
+
+  const selectedPlayer = useMemo(
+    () => players.find((player) => player.player_key === selectedPlayerKey) ?? null,
+    [players, selectedPlayerKey]
+  )
+  const selectedPlayerInsights = useMemo(
+    () => deriveSelectedPlayerInsights(playerDukeStats),
+    [playerDukeStats]
+  )
+  const selectedSummaryItems = useMemo(() => {
+    if (!selectedPlayer) return []
+
+    return [
+      { label: 'Games', value: String(selectedPlayer.games_played) },
+      { label: 'Win Rate', value: `${selectedPlayer.win_rate.toFixed(1)}%` },
+      { label: 'Podium Rate', value: `${selectedPlayer.podium_rate.toFixed(1)}%` },
+      { label: 'Norm Finish', value: selectedPlayer.avg_finish_percentile.toFixed(1) },
+    ]
+  }, [selectedPlayer])
+  const activeDukeName = useMemo(() => {
+    if (dukeFilter === 'all') return null
+    return dukeOptions.find((duke) => duke.slug === dukeFilter)?.name ?? null
+  }, [dukeFilter, dukeOptions])
+  const dukeSearchResults = useMemo(() => {
+    return filterDukesByQuery(dukeOptions, dukeQuery).slice(0, 6)
+  }, [dukeOptions, dukeQuery])
+
+  const loadSelectedPlayerStats = useCallback(
+    async (playerKey: string | null) => {
+      if (!playerKey) {
+        setPlayerDukeStats([])
+        setPlayerCategoryStats(null)
+        setSelectedStatsLoading(false)
+        setCategoryStatsLoading(false)
+        return
+      }
+
+      const { dukeView } = getPlayerStatsViewNames(timeWindow)
+
+      setSelectedStatsLoading(true)
+      setPlayerDukeStats([])
+      setLoadError('')
+
+      try {
+        const {
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession()
+
+        if (sessionError) throw sessionError
+
+        const nextViewerUserId = resolveProtectedAnalyticsViewerUserId(session)
+        setViewerUserId(nextViewerUserId)
+
+        if (!nextViewerUserId) {
+          setPlayerDukeStats([])
+          setPlayerCategoryStats(null)
+          return
+        }
+
+        let dukeStatsQuery = supabase
+          .from(dukeView)
+          .select('*')
+          .eq('player_key', playerKey)
+          .order('wins', { ascending: false })
+          .order('win_rate', { ascending: false })
+          .order('avg_finish_percentile', { ascending: false })
+          .order('avg_score', { ascending: false })
+
+        if (dukeFilter !== 'all') {
+          dukeStatsQuery = dukeStatsQuery.eq('duke_slug', dukeFilter)
+        }
+
+        const { data, error } = await dukeStatsQuery
+
+        if (error) throw error
+
+        setPlayerDukeStats(resolvePlayerDukeRows((data ?? []) as PlayerDukeRow[]))
+
+        try {
+          setCategoryStatsLoading(true)
+          const categoryStats = await loadPlayerCategoryStats(playerKey)
+          setPlayerCategoryStats(categoryStats)
+        } catch (categoryErr) {
+          console.error('Failed to load category breakdown', categoryErr)
+          setPlayerCategoryStats(null)
+        } finally {
+          setCategoryStatsLoading(false)
+        }
+      } catch (err: any) {
+        console.error(err)
+        setPlayerDukeStats([])
+        setLoadError(
+          err?.message ?? "Unable to load this player's duke breakdown right now. Pull to retry."
+        )
+      } finally {
+        setSelectedStatsLoading(false)
+      }
+    },
+    [dukeFilter, timeWindow]
+  )
 
   useEffect(() => {
-    loadData().catch((err) => {
-      console.error(err)
-      setLoading(false)
-    })
-  }, [timeWindow, dukeFilter])
+    void loadLeaderboard()
+  }, [loadLeaderboard])
+
+  useEffect(() => {
+    if (players.length === 0) {
+      if (selectedPlayerKey !== null) {
+        setSelectedPlayerKey(null)
+        setPlayerDukeStats([])
+        setPlayerCategoryStats(null)
+      }
+      return
+    }
+
+    if (!selectedPlayerKey || !players.some((player) => player.player_key === selectedPlayerKey)) {
+      const viewerKey = viewerUserId ? `user:${viewerUserId}` : null
+      const viewerRow = viewerKey
+        ? players.find((player) => player.player_key === viewerKey)
+        : null
+
+      if (!didDefaultSelectRef.current && viewerRow) {
+        didDefaultSelectRef.current = true
+        setSelectedPlayerKey(viewerRow.player_key)
+      } else {
+        setSelectedPlayerKey(players[0].player_key)
+      }
+    }
+  }, [players, selectedPlayerKey, viewerUserId])
+
+  useEffect(() => {
+    void loadSelectedPlayerStats(selectedPlayerKey)
+  }, [loadSelectedPlayerStats, selectedPlayerKey])
+
+  const retryAll = useCallback(async () => {
+    await loadLeaderboard()
+    await loadSelectedPlayerStats(selectedPlayerKey)
+  }, [loadLeaderboard, loadSelectedPlayerStats, selectedPlayerKey])
 
   async function onRefresh() {
     try {
       setRefreshing(true)
-      await loadData()
+      await retryAll()
     } finally {
       setRefreshing(false)
     }
@@ -292,567 +328,483 @@ export default function PlayerStatsScreen() {
 
   const leaderboard = useMemo(() => players.slice(0, 30), [players])
 
-  return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          tintColor={theme.colors.accent}
-        />
+  const winRatePercentile: PercentileResult | null = useMemo(() => {
+    if (!viewerUserId) return null
+    return computePercentileResult(allPlayers, `user:${viewerUserId}`, 'win_rate')
+  }, [allPlayers, viewerUserId])
+  const avgScorePercentile: PercentileResult | null = useMemo(() => {
+    if (!viewerUserId) return null
+    return computePercentileResult(allPlayers, `user:${viewerUserId}`, 'avg_score')
+  }, [allPlayers, viewerUserId])
+  const podiumPercentile: PercentileResult | null = useMemo(() => {
+    if (!viewerUserId) return null
+    return computePercentileResult(allPlayers, `user:${viewerUserId}`, 'podium_rate')
+  }, [allPlayers, viewerUserId])
+
+  const dukeVsGlobalRows: DukeVsGlobalRow[] = useMemo(() => {
+    if (playerDukeStats.length === 0 || globalDukeRows.length === 0) return []
+    return buildDukeVsGlobalRows(
+      playerDukeStats.map((row) => ({
+        duke_slug: row.duke_slug,
+        games_played: row.games_played,
+        wins: row.wins,
+        win_rate: row.win_rate,
+        avg_score: row.avg_score,
+      })),
+      globalDukeRows
+    )
+  }, [playerDukeStats, globalDukeRows])
+
+  const finishDistribution: FinishDistribution = playerExtras?.finishDistribution ?? {
+    '1st': 0,
+    '2nd': 0,
+    '3rd': 0,
+    '4th+': 0,
+    total: 0,
+  }
+  const isViewerSelected =
+    !!viewerUserId && selectedPlayerKey === `user:${viewerUserId}`
+
+  const refreshFrequentOpponents = useCallback(async () => {
+    if (!viewerUserId) {
+      setFrequentOpponents([])
+      return
+    }
+    try {
+      setFrequentOpponentsLoading(true)
+      const opponents = await loadFrequentOpponents(viewerUserId, 5)
+      setFrequentOpponents(opponents)
+    } catch (err) {
+      console.error('Failed to load frequent opponents', err)
+      setFrequentOpponents([])
+    } finally {
+      setFrequentOpponentsLoading(false)
+    }
+  }, [viewerUserId])
+
+  useEffect(() => {
+    void refreshFrequentOpponents()
+  }, [refreshFrequentOpponents])
+
+  useEffect(() => {
+    if (!viewerUserId) {
+      setPlayerExtras(null)
+      return
+    }
+    let cancelled = false
+    setPlayerExtrasLoading(true)
+    void loadPlayerExtras(`user:${viewerUserId}`, playerCountFilter)
+      .then((extras) => {
+        if (cancelled) return
+        setPlayerExtras(extras)
+      })
+      .catch((err) => {
+        console.error('Failed to load player extras', err)
+        if (!cancelled) setPlayerExtras(null)
+      })
+      .finally(() => {
+        if (!cancelled) setPlayerExtrasLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [viewerUserId, playerCountFilter])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('duke_global_stats')
+          .select('duke_slug, games_played, win_percentage, avg_score')
+        if (error) throw error
+        if (cancelled) return
+        setGlobalDukeRows((data ?? []) as GlobalDukeRowSlim[])
+      } catch (err) {
+        console.error('Failed to load global duke stats', err)
       }
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={styles.heroCard}>
-        <Text style={styles.kicker}>Global Leaderboard</Text>
-        <Text style={styles.title}>Player Stats</Text>
-        <Text style={styles.subtitle}>
-          Search any player or guest by Player ID, then tap a row for duke breakdown.
-        </Text>
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const useStackedLeaderboardCards = Number.isFinite(width) && width < 430
+  const handleDukeQueryChange = useCallback(
+    (value: string) => {
+      setDukeQuery(value)
 
-        <TextInput
-          value={query}
-          onChangeText={(text) => setQuery(text.toUpperCase())}
-          placeholder="Search Player ID or name"
-          placeholderTextColor={theme.colors.textMuted}
-          style={styles.input}
-          autoCapitalize="characters"
-          autoCorrect={false}
-        />
+      if (dukeFilter !== 'all') {
+        setDukeFilter('all')
+      }
+    },
+    [dukeFilter]
+  )
+  const handleApplyDukeFilter = useCallback(
+    (slug: string) => {
+      const nextName = dukeOptions.find((duke) => duke.slug === slug)?.name ?? ''
+      setDukeFilter(slug)
+      setDukeQuery(nextName)
+    },
+    [dukeOptions]
+  )
+  const handleClearDukeFilter = useCallback(() => {
+    setDukeFilter('all')
+    setDukeQuery('')
+  }, [])
+  const handleSubmitDukeSearch = useCallback(() => {
+    if (dukeSearchResults.length === 0) return
 
-        <View style={styles.filterRow}>
-          <Pressable
-            style={[styles.filterChip, timeWindow === 'all' && styles.filterChipActive]}
-            onPress={() => setTimeWindow('all')}
-          >
-            <Text
-              style={[styles.filterChipText, timeWindow === 'all' && styles.filterChipTextActive]}
-            >
-              All
-            </Text>
-          </Pressable>
+    const normalizedQuery = dukeQuery.trim().toLowerCase()
+    const nextMatch =
+      dukeSearchResults.find((duke) => duke.name.toLowerCase() === normalizedQuery) ??
+      dukeSearchResults[0]
 
-          <Pressable
-            style={[styles.filterChip, timeWindow === '30d' && styles.filterChipActive]}
-            onPress={() => setTimeWindow('30d')}
-          >
-            <Text
-              style={[styles.filterChipText, timeWindow === '30d' && styles.filterChipTextActive]}
-            >
-              30 Days
-            </Text>
-          </Pressable>
-        </View>
+    handleApplyDukeFilter(nextMatch.slug)
+  }, [dukeQuery, dukeSearchResults, handleApplyDukeFilter])
+  const handleLogout = useCallback(async () => {
+    try {
+      setLoggingOut(true)
+      await logoutAndClearActiveSessionState({
+        signOut: () => supabase.auth.signOut(),
+        clearActiveSessionState,
+      })
+      router.replace('/')
+    } catch (err: any) {
+      Alert.alert('Logout failed', err?.message ?? 'Unknown error')
+    } finally {
+      setLoggingOut(false)
+    }
+  }, [])
+  const accountMenuActions = useMemo(
+    () =>
+      buildBoundManageAccountMenuActions({
+        onManageData: () => router.push('/manage-data'),
+        onNewSession: () => router.replace('/create-session'),
+        onDukeStatistics: () => router.push('/duke-stats'),
+        onPlayerStatistics: () => router.push('/player-stats'),
+        onGlobalTrends: () => router.push('/global-trends'),
+        onLogout: () => {
+          void handleLogout()
+        },
+      }),
+    [handleLogout]
+  )
+  const openAccountActions = useCallback(() => {
+    setAccountMenuVisible(true)
+  }, [])
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.dukeRow}>
-          <Pressable
-            style={[styles.dukeChip, dukeFilter === 'all' && styles.dukeChipActive]}
-            onPress={() => setDukeFilter('all')}
-          >
-            <Text style={[styles.dukeChipText, dukeFilter === 'all' && styles.dukeChipTextActive]}>
-              All Dukes
-            </Text>
-          </Pressable>
+  const scrollToSelectedStats = useCallback(() => {
+    const target = selectedStatsAnchorY
+    if (target === null) return
+    requestAnimationFrame(() => {
+      screenScrollRef.current?.scrollTo({ y: Math.max(0, target - 8), animated: true })
+    })
+  }, [selectedStatsAnchorY])
 
-          {dukeOptions.map((slug) => (
-            <Pressable
-              key={slug}
-              style={[styles.dukeChip, dukeFilter === slug && styles.dukeChipActive]}
-              onPress={() => setDukeFilter(slug)}
-            >
-              <Text
-                style={[styles.dukeChipText, dukeFilter === slug && styles.dukeChipTextActive]}
+  const handleLeaderboardLongPress = useCallback(
+    (playerKey: string) => {
+      setSelectedPlayerKey(playerKey)
+      scrollToSelectedStats()
+    },
+    [scrollToSelectedStats]
+  )
+
+  const handleFrequentOpponentTap = useCallback((playerKey: string) => {
+    setSelectedPlayerKey(playerKey)
+  }, [])
+
+  const handleFrequentOpponentLongPress = useCallback(
+    (playerKey: string) => {
+      setSelectedPlayerKey(playerKey)
+      scrollToSelectedStats()
+    },
+    [scrollToSelectedStats]
+  )
+  const handleAnalyticsRouteChange = useCallback(
+    (key: string) => {
+      const nextSegment = analyticsRouteSegments.find((segment) => segment.key === key)
+      if (!nextSegment || nextSegment.href === analyticsRouteHrefByKey.players) {
+        return
+      }
+
+      router.push(nextSegment.href)
+    },
+    [analyticsRouteSegments]
+  )
+
+  return (
+    // Card-art ImageBackground was removed from this data-dense screen so
+    // the leaderboard and percentile cards render against a clean dark
+    // backdrop instead of competing with a textured underlay.
+    <View style={styles.pageBackground}>
+      <View style={styles.pageScrim}>
+        <ScrollView
+          ref={screenScrollRef}
+          style={styles.container}
+          contentContainerStyle={[styles.content, { paddingTop: getBottomNavTopClearance(insets.top) }]}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={theme.colors.accent}
+            />
+          }
+          showsVerticalScrollIndicator={false}
+        >
+          <ValeriaHeader
+            compact
+            showBack
+            title="Player Stats"
+            subtitle="Global leaderboard + duke breakdown"
+            {...manageAccountHeaderProps}
+            onRightPress={openAccountActions}
+            rightDisabled={loggingOut}
+          />
+
+          <AnalyticsSegmentedControl
+            segments={analyticsRouteSegments}
+            activeKey="players"
+            onChange={handleAnalyticsRouteChange}
+          />
+
+          <PlayerStatsHeroCard
+            query={query}
+            timeWindow={timeWindow}
+            dukeQuery={dukeQuery}
+            activeDukeName={activeDukeName}
+            dukeResults={dukeSearchResults}
+            onQueryChange={setQuery}
+            onTimeWindowChange={setTimeWindow}
+            onDukeQueryChange={handleDukeQueryChange}
+            onSubmitDukeSearch={handleSubmitDukeSearch}
+            onApplyDukeFilter={handleApplyDukeFilter}
+            onClearDukeFilter={handleClearDukeFilter}
+          />
+
+          {accessState && !accessState.canLoad ? (
+            <View style={styles.accessCard}>
+              <Text style={styles.accessTitle}>{accessState.title}</Text>
+              <Text style={styles.accessText}>{accessState.body}</Text>
+
+              <Pressable
+                style={({ pressed }) => [styles.accessButton, pressed && styles.buttonPressed]}
+                onPress={() => router.push(accessState.actionPath)}
               >
-                {formatDukeName(slug)}
-              </Text>
-            </Pressable>
-          ))}
-        </ScrollView>
-      </View>
-
-      <View style={styles.sectionCard}>
-        <View style={styles.sectionTitleRow}>
-          <Text style={styles.sectionTitle}>Leaderboard</Text>
-          <Text style={styles.sectionCount}>{leaderboard.length}</Text>
-        </View>
-
-        {loading ? (
-          <View style={styles.loadingCard}>
-            <ActivityIndicator color={theme.colors.accent} />
-            <Text style={styles.loadingText}>Loading leaderboard...</Text>
-          </View>
-        ) : leaderboard.length === 0 ? (
-          <Text style={styles.emptyText}>No players found.</Text>
-        ) : (
-          leaderboard.map((player, index) => (
-            <Pressable
-              key={player.player_key}
-              style={[
-                styles.playerRow,
-                selectedPlayer?.player_key === player.player_key && styles.playerRowSelected,
-              ]}
-              onPress={() => setSelectedPlayer(player)}
-            >
-              <View style={styles.leftCluster}>
-                <View style={styles.playerRank}>
-                  <Text style={styles.playerRankText}>{index + 1}</Text>
-                </View>
-
-                <View style={styles.playerMeta}>
-                  <Text style={styles.playerName} numberOfLines={1}>
-                    {player.player_name}
-                  </Text>
-                  <View style={styles.playerMetaRow}>
-                    <Text style={styles.playerId} numberOfLines={1}>
-                      {player.public_player_id ?? 'No Player ID'}
-                    </Text>
-                    <View
-                      style={[
-                        styles.typePill,
-                        player.player_type === 'guest' ? styles.typePillGuest : styles.typePillUser,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.typePillText,
-                          player.player_type === 'guest'
-                            ? styles.typePillGuestText
-                            : styles.typePillUserText,
-                        ]}
-                      >
-                        {player.player_type === 'guest' ? 'Guest' : 'User'}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              </View>
-
-              <View style={styles.rightStats}>
-                <View style={styles.miniStat}>
-                  <Text style={styles.miniStatValue}>{player.wins}</Text>
-                  <Text style={styles.miniStatLabel}>W</Text>
-                </View>
-
-                <View style={styles.miniStat}>
-                  <Text style={styles.miniStatValue}>{player.games_played}</Text>
-                  <Text style={styles.miniStatLabel}>G</Text>
-                </View>
-
-                <View style={styles.miniStat}>
-                  <Text style={styles.miniStatValue}>{player.avg_score.toFixed(1)}</Text>
-                  <Text style={styles.miniStatLabel}>AVG</Text>
-                </View>
-              </View>
-            </Pressable>
-          ))
-        )}
-      </View>
-
-      {selectedPlayer ? (
-        <View style={styles.sectionCard}>
-          <View style={styles.selectedHeader}>
-            <View>
-              <Text style={styles.sectionTitle}>{selectedPlayer.player_name}</Text>
-              <Text style={styles.selectedSub}>
-                {selectedPlayer.public_player_id ?? 'No Player ID'} ·{' '}
-                {selectedPlayer.player_type === 'guest' ? 'Guest' : 'User'}
-              </Text>
+                <Text style={styles.accessButtonText}>{accessState.actionLabel}</Text>
+              </Pressable>
             </View>
-
-            <View style={styles.summaryPill}>
-              <Text style={styles.summaryPillValue}>{selectedPlayer.games_played}</Text>
-              <Text style={styles.summaryPillLabel}>Games</Text>
-            </View>
-          </View>
-
-          {playerDukeStats.length === 0 ? (
-            <Text style={styles.emptyText}>No duke stats for current filter.</Text>
           ) : (
-            playerDukeStats.map((row) => (
-              <View key={row.duke_slug} style={styles.dukeCard}>
-                <View style={styles.dukeCardLeft}>
-                  <View style={styles.dukeThumbWrap}>
-                    {cardImages[row.duke_slug] ? (
-                      <Image
-                        source={cardImages[row.duke_slug]}
-                        style={styles.dukeThumb}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <View style={styles.dukeThumbFallback}>
-                        <Text style={styles.dukeThumbFallbackText}>No Image</Text>
-                      </View>
-                    )}
-                  </View>
+            <>
+              <PlayerCountFilterChips
+                value={playerCountFilter}
+                onChange={setPlayerCountFilter}
+                label="Filter your stats by player count"
+              />
 
-                  <View style={styles.dukeCardMeta}>
-                    <Text style={styles.dukeStatName}>{formatDukeName(row.duke_slug)}</Text>
-                    <Text style={styles.dukeStatSub}>
-                      {row.games_played} games · {row.wins} wins · Avg finish {row.avg_finish.toFixed(2)}
-                    </Text>
-                  </View>
-                </View>
+              <FrequentOpponentsCard
+                opponents={frequentOpponents}
+                loading={frequentOpponentsLoading}
+                onSelect={handleFrequentOpponentTap}
+                onLongPress={handleFrequentOpponentLongPress}
+              />
 
-                <View style={styles.dukeCardRight}>
-                  <Text style={styles.dukeStatValue}>{row.avg_score.toFixed(1)}</Text>
-                  <Text style={styles.dukeStatLabel}>Avg Score</Text>
+              {loadError ? (
+                <View style={styles.errorCard}>
+                  <Text style={styles.errorTitle}>Unable to refresh player analytics</Text>
+                  <Text style={styles.errorText}>
+                    {loadError}
+                    {didLoadOnceRef.current && allPlayers.length > 0
+                      ? ' Showing the last successful leaderboard below.'
+                      : ''}
+                  </Text>
+
+                  <Pressable
+                    style={({ pressed }) => [styles.errorButton, pressed && styles.buttonPressed]}
+                    onPress={() => {
+                      void retryAll()
+                    }}
+                  >
+                    <Text style={styles.errorButtonText}>Retry</Text>
+                  </Pressable>
                 </View>
+              ) : null}
+
+              <PlayerLeaderboardSection
+                leaderboard={leaderboard}
+                loading={loading}
+                stackedLayout={useStackedLeaderboardCards}
+                selectedPlayerKey={selectedPlayerKey}
+                onSelect={setSelectedPlayerKey}
+                onLongPress={handleLeaderboardLongPress}
+              />
+
+              {viewerUserId ? (
+                <>
+                  <HeadToHeadCard
+                    records={playerExtras?.headToHead ?? []}
+                    loading={playerExtrasLoading}
+                  />
+                  <FinishDistributionCard distribution={finishDistribution} />
+                  <PercentileGroupCard
+                    winRate={winRatePercentile}
+                    avgScore={avgScorePercentile}
+                    podiumRate={podiumPercentile}
+                    totalPlayers={allPlayers.length}
+                  />
+                </>
+              ) : null}
+
+              <View
+                onLayout={(event) =>
+                  setSelectedStatsAnchorY(event.nativeEvent.layout.y)
+                }
+              >
+                <PlayerSelectedStatsSection
+                  player={selectedPlayer}
+                  summaryItems={selectedSummaryItems}
+                  insights={selectedPlayerInsights}
+                  loading={selectedStatsLoading}
+                  dukeRows={playerDukeStats}
+                />
+
+                {selectedPlayer && isViewerSelected ? (
+                  <DukeVsGlobalCard rows={dukeVsGlobalRows} />
+                ) : null}
+
+                {selectedPlayer ? (
+                  <PlayerCategoryBreakdownCard
+                    stats={playerCategoryStats}
+                    loading={categoryStatsLoading}
+                    emptyHint={
+                      selectedPlayer.player_type === 'guest'
+                        ? "No locked games where you've shared this guest's data."
+                        : 'No locked games visible for this player yet.'
+                    }
+                  />
+                ) : null}
               </View>
-            ))
+            </>
           )}
-        </View>
-      ) : null}
-    </ScrollView>
+        </ScrollView>
+
+        <ManageAccountModal
+          visible={accountMenuVisible}
+          title={manageAccountAlertCopy.title}
+          message={manageAccountAlertCopy.message}
+          actions={accountMenuActions}
+          onRequestClose={() => setAccountMenuVisible(false)}
+        />
+      </View>
+    </View>
   )
 }
 
 const styles = StyleSheet.create({
-  container: {
+  pageBackground: {
     flex: 1,
     backgroundColor: theme.colors.background,
   },
-  content: {
-    padding: 12,
-    paddingBottom: 28,
+
+  pageScrim: {
+    flex: 1,
+    backgroundColor: 'rgba(10, 15, 30, 0.83)',
   },
-  heroCard: {
-    backgroundColor: theme.colors.surfaceAlt,
-    borderRadius: 22,
+
+  container: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+
+  content: {
+    padding: 10,
+    paddingTop: 4,
+    paddingBottom: 24,
+  },
+
+  errorCard: {
+    backgroundColor: 'rgba(255, 126, 138, 0.1)',
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: theme.colors.error,
     padding: 14,
     marginBottom: 12,
-    ...theme.shadow.card,
   },
-  kicker: {
-    color: theme.colors.textMuted,
-    fontSize: 11,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-    marginBottom: 6,
-    letterSpacing: 1,
-  },
-  title: {
+
+  errorTitle: {
     color: theme.colors.text,
-    fontSize: 26,
+    fontSize: 15,
     fontWeight: '900',
-    marginBottom: 6,
+    marginBottom: 4,
   },
-  subtitle: {
+
+  errorText: {
     color: theme.colors.textSecondary,
     fontSize: 13,
-    lineHeight: 18,
     fontWeight: '700',
-    marginBottom: 10,
+    lineHeight: 19,
   },
-  input: {
-    backgroundColor: theme.colors.backgroundAlt,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    color: theme.colors.text,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    fontWeight: '700',
-    marginBottom: 10,
-  },
-  filterRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 10,
-  },
-  filterChip: {
-    flex: 1,
-    backgroundColor: theme.colors.surfaceRaised,
+
+  errorButton: {
+    alignSelf: 'flex-start',
+    marginTop: 12,
+    backgroundColor: playerStatsSurface.panelRaised,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: theme.colors.error,
+    paddingHorizontal: 14,
     paddingVertical: 10,
   },
-  filterChipActive: {
-    backgroundColor: theme.colors.accent,
-    borderColor: theme.colors.accent,
-  },
-  filterChipText: {
+
+  errorButtonText: {
     color: theme.colors.text,
-    textAlign: 'center',
-    fontWeight: '800',
     fontSize: 13,
+    fontWeight: '900',
   },
-  filterChipTextActive: {
-    color: theme.colors.background,
-  },
-  dukeRow: {
-    marginTop: 2,
-  },
-  dukeChip: {
-    backgroundColor: theme.colors.surfaceRaised,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginRight: 8,
-  },
-  dukeChipActive: {
-    backgroundColor: theme.colors.accent,
-    borderColor: theme.colors.accent,
-  },
-  dukeChipText: {
-    color: theme.colors.text,
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  dukeChipTextActive: {
-    color: theme.colors.background,
-  },
-  sectionCard: {
-    backgroundColor: theme.colors.surfaceAlt,
+
+  accessCard: {
+    backgroundColor: playerStatsSurface.panel,
     borderRadius: 22,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: 12,
+    borderColor: theme.colors.borderAccent ?? theme.colors.accent,
+    padding: 16,
     marginBottom: 12,
     ...theme.shadow.card,
   },
-  sectionTitleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  sectionTitle: {
-    color: theme.colors.text,
-    fontSize: 17,
-    fontWeight: '900',
-  },
-  sectionCount: {
-    color: theme.colors.accent,
-    fontSize: 13,
-    fontWeight: '900',
-  },
-  loadingCard: {
-    paddingVertical: 20,
-    alignItems: 'center',
-  },
-  loadingText: {
-    color: theme.colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '700',
-    marginTop: 8,
-  },
-  emptyText: {
-    color: theme.colors.textMuted,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  playerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: theme.colors.surfaceRaised,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    marginBottom: 8,
-  },
-  playerRowSelected: {
-    borderColor: theme.colors.accent,
-    ...theme.shadow.glow,
-  },
-  leftCluster: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    minWidth: 0,
-    marginRight: 8,
-  },
-  playerRank: {
-    width: 32,
-    height: 32,
-    borderRadius: 999,
-    backgroundColor: theme.colors.backgroundAlt,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  playerRankText: {
-    color: theme.colors.text,
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  playerMeta: {
-    flex: 1,
-    minWidth: 0,
-  },
-  playerName: {
-    color: theme.colors.text,
-    fontSize: 15,
-    fontWeight: '900',
-    marginBottom: 2,
-  },
-  playerMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  playerId: {
-    color: theme.colors.textMuted,
-    fontSize: 11,
-    fontWeight: '700',
-    flexShrink: 1,
-  },
-  typePill: {
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  typePillUser: {
-    backgroundColor: 'rgba(89,183,255,0.16)',
-    borderWidth: 1,
-    borderColor: '#59B7FF',
-  },
-  typePillGuest: {
-    backgroundColor: 'rgba(231,199,104,0.16)',
-    borderWidth: 1,
-    borderColor: '#E7C768',
-  },
-  typePillText: {
-    fontSize: 10,
-    fontWeight: '900',
-  },
-  typePillUserText: {
-    color: '#59B7FF',
-  },
-  typePillGuestText: {
-    color: '#E7C768',
-  },
-  rightStats: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'center',
-  },
-  miniStat: {
-    minWidth: 48,
-    alignItems: 'center',
-  },
-  miniStatValue: {
-    color: theme.colors.text,
-    fontSize: 16,
-    fontWeight: '900',
-  },
-  miniStatLabel: {
-    color: theme.colors.textMuted,
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  selectedHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10,
-    gap: 12,
-  },
-  selectedSub: {
-    color: theme.colors.textMuted,
-    fontSize: 11,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  summaryPill: {
-    backgroundColor: theme.colors.surfaceRaised,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    alignItems: 'center',
-  },
-  summaryPillValue: {
-    color: theme.colors.text,
-    fontSize: 16,
-    fontWeight: '900',
-  },
-  summaryPillLabel: {
-    color: theme.colors.textMuted,
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  dukeCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: theme.colors.surfaceRaised,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: 10,
-    marginBottom: 8,
-  },
-  dukeCardLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    minWidth: 0,
-    marginRight: 10,
-  },
-  dukeThumbWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-    overflow: 'hidden',
-    backgroundColor: theme.colors.backgroundAlt,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    marginRight: 10,
-  },
-  dukeThumb: {
-    width: '100%',
-    height: '100%',
-  },
-  dukeThumbFallback: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 4,
-  },
-  dukeThumbFallbackText: {
-    color: theme.colors.textMuted,
-    fontSize: 8,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-  dukeCardMeta: {
-    flex: 1,
-    minWidth: 0,
-  },
-  dukeStatName: {
-    color: theme.colors.text,
-    fontSize: 14,
-    fontWeight: '900',
-    marginBottom: 2,
-  },
-  dukeStatSub: {
-    color: theme.colors.textMuted,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  dukeCardRight: {
-    alignItems: 'flex-end',
-  },
-  dukeStatValue: {
+
+  accessTitle: {
     color: theme.colors.text,
     fontSize: 18,
     fontWeight: '900',
+    marginBottom: 6,
   },
-  dukeStatLabel: {
-    color: theme.colors.textMuted,
-    fontSize: 10,
-    fontWeight: '800',
+
+  accessText: {
+    color: theme.colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 19,
+  },
+
+  accessButton: {
+    alignSelf: 'flex-start',
+    marginTop: 14,
+    backgroundColor: theme.colors.primary,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: theme.colors.borderAccent ?? theme.colors.accent,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    ...theme.shadow.glow,
+  },
+
+  accessButtonText: {
+    color: theme.colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+
+  buttonPressed: {
+    transform: [{ scale: 0.98 }],
+    opacity: 0.92,
   },
 })

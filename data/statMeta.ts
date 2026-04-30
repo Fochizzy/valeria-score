@@ -1,7 +1,12 @@
-import type { StatKey } from './cards'
-import { scoreIcons } from './scoreIcons'
+import type { StatKey } from './cards.ts'
+import { scoreIcons } from './scoreIcons.ts'
 
-export type StatSection = 'resources' | 'equipment' | 'counts' | 'points'
+export type StatSection =
+  | 'resources'
+  | 'equipment'
+  | 'monsterSymbols'
+  | 'counts'
+  | 'points'
 
 export type StatMetaItem = {
   key: StatKey
@@ -95,25 +100,25 @@ export const statMeta: StatMetaItem[] = [
   {
     key: 'bossCount',
     label: 'Boss',
-    section: 'points',
+    section: 'monsterSymbols',
     icon: scoreIcons.bossCount,
   },
   {
     key: 'lieutenantCount',
     label: 'Lieutenant',
-    section: 'points',
+    section: 'monsterSymbols',
     icon: scoreIcons.lieutenantCount,
   },
   {
     key: 'beastCount',
     label: 'Beast',
-    section: 'points',
+    section: 'monsterSymbols',
     icon: scoreIcons.beastCount,
   },
   {
     key: 'minionCount',
     label: 'Minion',
-    section: 'points',
+    section: 'monsterSymbols',
     icon: scoreIcons.minionCount,
   },
 ]
