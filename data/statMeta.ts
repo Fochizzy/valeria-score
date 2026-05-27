@@ -55,7 +55,7 @@ export const statMeta: StatMetaItem[] = [
   },
   {
     key: 'holy',
-    label: 'Holy',
+    label: 'Holy Symbols',
     section: 'equipment',
     icon: scoreIcons.holy,
   },
