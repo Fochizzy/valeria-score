@@ -679,7 +679,7 @@ export default function ManageDataScreen() {
                   <View style={styles.sectionHeaderCopy}>
                     <Text style={styles.sectionTitle}>Guest Profiles</Text>
                     <Text style={styles.sectionSubtitle}>
-                      Shared guests you created across sessions.
+                      Guest profiles you created. Shared viewers can open them on Profile, but only you can delete them here.
                     </Text>
                   </View>
                 </View>
@@ -688,7 +688,7 @@ export default function ManageDataScreen() {
                   <View style={styles.emptyPanel}>
                     <Text style={styles.emptyTitle}>No guest profiles yet</Text>
                     <Text style={styles.emptyText}>
-                      Shared guests you create during sessions will show up here for cleanup.
+                      Guest profiles you create during sessions will show up here for owner-only cleanup.
                     </Text>
                   </View>
                 ) : (

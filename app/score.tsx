@@ -40,9 +40,11 @@ import {
   loadSessionLockState,
   loadMyExistingScore,
   loadSessionScoreRevision,
-  saveMyScore,
+  saveMyScoreCommit,
+  saveMyScoreDraft,
 } from '../lib/scores'
 import {
+  areScoreInputsEqual,
   buildScoreDraftStorageKey,
   hasUnsavedScoreChanges,
   isSessionFinished,
@@ -51,6 +53,7 @@ import {
   resolveLoadedScoreState,
   resolveScoreSessionId,
   resolveScoreScrollResetTarget,
+  shouldAutoSaveScoreProgress,
   shouldRefreshScoreLockOnForeground,
   shouldAutoRouteScoreToVictory,
   shouldResetScoreScrollOnDukeSelection,
@@ -88,6 +91,19 @@ const portraitDukeSlugs = new Set([
   'sir_roberts_of_stoneblood',
   'tsoukalos_the_conspirator',
 ])
+
+type ScoreSaveActorIds = {
+  ownerUserId: string | null
+  scoredByUserId: string | null
+}
+
+type ScoreAutosaveSnapshot = {
+  sessionId: string
+  selectedSlug: string | null
+  inputs: ScoreInputs
+  totalScore: number
+  shouldAutoSave: boolean
+}
 
 function getSectionAccent(title: string) {
   switch (title) {
@@ -175,16 +191,25 @@ export default function ScoreScreen() {
   const [inputs, setInputs] = useState<ScoreInputs>(createEmptyInputs())
   const [baselineSlug, setBaselineSlug] = useState<string | null>(initialSlug)
   const [baselineInputs, setBaselineInputs] = useState<ScoreInputs>(createEmptyInputs())
+  const [draftBaselineSlug, setDraftBaselineSlug] = useState<string | null>(initialSlug)
+  const [draftBaselineInputs, setDraftBaselineInputs] = useState<ScoreInputs>(
+    createEmptyInputs()
+  )
   const [effectiveSessionId, setEffectiveSessionId] = useState<string>(
     routeSessionId || ''
   )
   const [saving, setSaving] = useState(false)
+  const [isAutoSaving, setIsAutoSaving] = useState(false)
   const [resolvingSession, setResolvingSession] = useState(true)
   const [loadingExisting, setLoadingExisting] = useState(true)
   const [loadError, setLoadError] = useState<string>('')
   const [isLocked, setIsLocked] = useState(false)
   const [lastSavedAt, setLastSavedAt] = useState<string>('')
+  const [lastDraftSavedAt, setLastDraftSavedAt] = useState<string>('')
   const [isSubmittedLock, setIsSubmittedLock] = useState(false)
+  const [canSyncDraftToSupabase, setCanSyncDraftToSupabase] = useState(
+    isGuestMode || isAddedPlayerMode
+  )
   const [saveFeedback, setSaveFeedback] = useState<{
     title: string
     body: string
@@ -198,6 +223,10 @@ export default function ScoreScreen() {
   const autoRoutedToVictoryRef = useRef(false)
   const didFocusRefreshRef = useRef(false)
   const appStateRef = useRef(AppState.currentState)
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoSavePromiseRef = useRef<Promise<void> | null>(null)
+  const pendingAutoSaveRef = useRef(false)
+  const latestAutoSaveSnapshotRef = useRef<ScoreAutosaveSnapshot | null>(null)
 
   const selectedDuke = useMemo(() => {
     if (!selectedSlug) return null
@@ -237,6 +266,15 @@ export default function ScoreScreen() {
     })
   }, [baselineInputs, baselineSlug, inputs, selectedSlug])
 
+  const hasUnsavedDraftChanges = useMemo(() => {
+    return hasUnsavedScoreChanges({
+      selectedSlug,
+      baselineSlug: draftBaselineSlug,
+      inputs,
+      baselineInputs: draftBaselineInputs,
+    })
+  }, [draftBaselineInputs, draftBaselineSlug, inputs, selectedSlug])
+
   const draftStorageKey = useMemo(
     () =>
       buildScoreDraftStorageKey({
@@ -244,11 +282,14 @@ export default function ScoreScreen() {
         guestMode: isGuestMode,
         guestProfileId: guestProfileId || null,
         guestEntryId: guestEntryId || null,
+        addedUserId: isAddedPlayerMode ? addedUserId : null,
       }),
     [
+      addedUserId,
       effectiveSessionId,
       guestEntryId,
       guestProfileId,
+      isAddedPlayerMode,
       isGuestMode,
       routeSessionId,
     ]
@@ -289,7 +330,11 @@ export default function ScoreScreen() {
         setInputs(empty)
         setBaselineSlug(initialSlug)
         setBaselineInputs(empty)
+        setDraftBaselineSlug(initialSlug)
+        setDraftBaselineInputs(empty)
         setLastSavedAt('')
+        setLastDraftSavedAt('')
+        setCanSyncDraftToSupabase(isGuestMode || isAddedPlayerMode)
         setIsLocked(false)
         return
         }
@@ -320,6 +365,7 @@ export default function ScoreScreen() {
           guestMode: isGuestMode,
           guestProfileId: guestProfileId || null,
           guestEntryId: guestEntryId || null,
+          addedUserId: isAddedPlayerMode ? addedUserId : null,
         })
 
         const [existing, sessionLockState, sessionScoreRevision, storedDraft] = await Promise.all([
@@ -340,6 +386,7 @@ export default function ScoreScreen() {
           return
         }
 
+        const parsedLocalDraft = parseStoredScoreDraft(storedDraft)
         const normalizedExisting = existing
           ? {
               selectedSlug:
@@ -354,10 +401,19 @@ export default function ScoreScreen() {
                 Number(existing.confirmed_revision ?? 0) === sessionScoreRevision,
             }
           : null
+        const remoteDraft =
+          existing?.draft_updated_at || existing?.draft_duke_slug
+            ? {
+                selectedSlug: existing?.draft_duke_slug ?? null,
+                inputs: normalizeScoreInputs(existing?.draft_inputs ?? {}),
+                updatedAt: existing?.draft_updated_at ?? '',
+              }
+            : null
         const resolvedState = resolveLoadedScoreState({
           initialSlug,
           existingScore: normalizedExisting,
-          draft: parseStoredScoreDraft(storedDraft),
+          remoteDraft,
+          localDraft: parsedLocalDraft,
           sessionFinished: isSessionFinished(
             sessionLockState.totalEntries,
             sessionLockState.lockedEntries
@@ -366,13 +422,17 @@ export default function ScoreScreen() {
 
         setSelectedSlug(resolvedState.selectedSlug)
         setInputs(resolvedState.inputs)
-        setBaselineSlug(resolvedState.baselineSlug)
-        setBaselineInputs(resolvedState.baselineInputs)
-        setLastSavedAt(resolvedState.lastSavedAt)
+        setBaselineSlug(resolvedState.committedBaselineSlug)
+        setBaselineInputs(resolvedState.committedBaselineInputs)
+        setDraftBaselineSlug(resolvedState.draftBaselineSlug)
+        setDraftBaselineInputs(resolvedState.draftBaselineInputs)
+        setLastSavedAt(resolvedState.lastCommittedAt)
+        setLastDraftSavedAt(resolvedState.lastDraftSavedAt)
+        setCanSyncDraftToSupabase(Boolean(existing) || isGuestMode || isAddedPlayerMode)
         setIsLocked(resolvedState.isLocked)
-        setIsSubmittedLock(Boolean(resolvedState.lastSavedAt) && !resolvedState.isLocked)
+        setIsSubmittedLock(Boolean(resolvedState.lastCommittedAt) && !resolvedState.isLocked)
 
-        if (nextDraftStorageKey && (normalizedExisting || resolvedState.isLocked)) {
+        if (nextDraftStorageKey && resolvedState.isLocked) {
           void AsyncStorage.removeItem(nextDraftStorageKey).catch((error) => {
             console.error('Failed to clear score draft after load.', error)
           })
@@ -391,13 +451,15 @@ export default function ScoreScreen() {
       }
     }
   }, [
+    addedUserId,
     dukeCards,
     guestEntryId,
     guestProfileId,
     initialSlug,
+    isAddedPlayerMode,
     isGuestMode,
-      routeSessionId,
-    ])
+    routeSessionId,
+  ])
 
   useEffect(() => {
     void loadExistingScore()
@@ -505,7 +567,7 @@ export default function ScoreScreen() {
 
     void (async () => {
       try {
-        if (isLocked || !isDirty) {
+        if (isLocked || !selectedSlug || !hasUnsavedDraftChanges) {
           await AsyncStorage.removeItem(draftStorageKey)
           return
         }
@@ -515,6 +577,7 @@ export default function ScoreScreen() {
           JSON.stringify({
             selectedSlug,
             inputs,
+            updatedAt: new Date().toISOString(),
           })
         )
       } catch (error) {
@@ -529,8 +592,8 @@ export default function ScoreScreen() {
     }
   }, [
     draftStorageKey,
+    hasUnsavedDraftChanges,
     inputs,
-    isDirty,
     isLocked,
     loadingExisting,
     resolvingSession,
@@ -579,6 +642,178 @@ export default function ScoreScreen() {
     }
   }, [draftStorageKey])
 
+  const resolveSaveActorIds = useCallback(async (): Promise<ScoreSaveActorIds> => {
+    if (!isGuestMode && !isAddedPlayerMode) {
+      return {
+        ownerUserId: null,
+        scoredByUserId: null,
+      }
+    }
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
+
+    if (userError || !user) {
+      throw new Error('User not authenticated')
+    }
+
+    if (isAddedPlayerMode) {
+      return {
+        ownerUserId: addedUserId,
+        scoredByUserId: user.id,
+      }
+    }
+
+    return {
+      ownerUserId: user.id,
+      scoredByUserId: null,
+    }
+  }, [addedUserId, isAddedPlayerMode, isGuestMode])
+
+  const persistDraftSnapshot = useCallback(
+    async (snapshot: {
+      sessionId: string
+      dukeSlug: string
+      inputs: ScoreInputs
+      totalScore: number
+    }) => {
+      const { ownerUserId, scoredByUserId } = await resolveSaveActorIds()
+
+      return saveMyScoreDraft(
+        snapshot.sessionId,
+        snapshot.dukeSlug,
+        snapshot.inputs,
+        snapshot.totalScore,
+        {
+          guestMode: isGuestMode,
+          guestName: guestName || null,
+          guestProfileId: guestProfileId || null,
+          guestEntryId: guestEntryId || null,
+          ownerUserId,
+          scoredByUserId,
+          addedPlayerName: isAddedPlayerMode ? addedPlayerName || null : null,
+          lockScore: false,
+          includedInStats: false,
+        }
+      )
+    },
+    [
+      addedPlayerName,
+      guestEntryId,
+      guestName,
+      guestProfileId,
+      isAddedPlayerMode,
+      isGuestMode,
+      resolveSaveActorIds,
+    ]
+  )
+
+  const persistCommittedSnapshot = useCallback(
+    async (snapshot: {
+      sessionId: string
+      dukeSlug: string
+      inputs: ScoreInputs
+      totalScore: number
+    }) => {
+      const { ownerUserId, scoredByUserId } = await resolveSaveActorIds()
+
+      return saveMyScoreCommit(
+        snapshot.sessionId,
+        snapshot.dukeSlug,
+        snapshot.inputs,
+        snapshot.totalScore,
+        {
+          guestMode: isGuestMode,
+          guestName: guestName || null,
+          guestProfileId: guestProfileId || null,
+          guestEntryId: guestEntryId || null,
+          ownerUserId,
+          scoredByUserId,
+          addedPlayerName: isAddedPlayerMode ? addedPlayerName || null : null,
+          lockScore: false,
+          includedInStats: false,
+        }
+      )
+    },
+    [
+      addedPlayerName,
+      guestEntryId,
+      guestName,
+      guestProfileId,
+      isAddedPlayerMode,
+      isGuestMode,
+      resolveSaveActorIds,
+    ]
+  )
+
+  const clearPendingAutoSaveTimer = useCallback(() => {
+    if (autoSaveTimerRef.current !== null) {
+      clearTimeout(autoSaveTimerRef.current)
+      autoSaveTimerRef.current = null
+    }
+  }, [])
+
+  const runAutoSave = useCallback(async () => {
+    const snapshot = latestAutoSaveSnapshotRef.current
+
+    if (!snapshot?.shouldAutoSave || !snapshot.selectedSlug) {
+      return
+    }
+
+    const safeSelectedSlug = snapshot.selectedSlug
+
+    if (autoSavePromiseRef.current) {
+      pendingAutoSaveRef.current = true
+      return autoSavePromiseRef.current
+    }
+
+    const autoSavePromise = (async () => {
+      setIsAutoSaving(true)
+
+      try {
+        const savedRow = await persistDraftSnapshot({
+          sessionId: snapshot.sessionId,
+          dukeSlug: safeSelectedSlug,
+          inputs: snapshot.inputs,
+          totalScore: snapshot.totalScore,
+        })
+
+        const savedAt =
+          typeof savedRow?.draft_updated_at === 'string' && savedRow.draft_updated_at
+            ? savedRow.draft_updated_at
+            : new Date().toISOString()
+
+        setLastDraftSavedAt(savedAt)
+        setDraftBaselineSlug(safeSelectedSlug)
+        setDraftBaselineInputs(snapshot.inputs)
+      } catch (error) {
+        console.error('Failed to auto-save score progress.', error)
+      } finally {
+        setIsAutoSaving(false)
+        autoSavePromiseRef.current = null
+
+        const latestSnapshot = latestAutoSaveSnapshotRef.current
+        const needsAnotherPass =
+          pendingAutoSaveRef.current ||
+          (latestSnapshot?.shouldAutoSave === true &&
+            latestSnapshot.selectedSlug !== null &&
+            (latestSnapshot.selectedSlug !== snapshot.selectedSlug ||
+              !areScoreInputsEqual(latestSnapshot.inputs, snapshot.inputs)))
+
+        pendingAutoSaveRef.current = false
+
+        if (needsAnotherPass) {
+          void runAutoSave()
+        }
+      }
+    })()
+
+    autoSavePromiseRef.current = autoSavePromise
+    return autoSavePromise
+  }, [persistDraftSnapshot])
+
   function updateInput(key: StatKey, value: number) {
     if (isInteractionBlocked) return
 
@@ -592,19 +827,78 @@ export default function ScoreScreen() {
     }))
   }
 
+  const shouldAutoSaveProgress = useMemo(
+    () =>
+      canSyncDraftToSupabase &&
+      shouldAutoSaveScoreProgress({
+        sessionId: effectiveSessionId,
+        selectedSlug,
+        isDirty: hasUnsavedDraftChanges,
+        isLocked,
+        resolvingSession,
+        loadingExisting,
+        isSavingManually: saving,
+        hasLoadError: Boolean(loadError),
+      }),
+    [
+      canSyncDraftToSupabase,
+      effectiveSessionId,
+      hasUnsavedDraftChanges,
+      isLocked,
+      loadError,
+      loadingExisting,
+      resolvingSession,
+      saving,
+      selectedSlug,
+    ]
+  )
+
+  useEffect(() => {
+    latestAutoSaveSnapshotRef.current = {
+      sessionId: effectiveSessionId,
+      selectedSlug,
+      inputs: normalizeScoreInputs(inputs),
+      totalScore,
+      shouldAutoSave: shouldAutoSaveProgress,
+    }
+  }, [effectiveSessionId, inputs, selectedSlug, shouldAutoSaveProgress, totalScore])
+
+  useEffect(() => {
+    clearPendingAutoSaveTimer()
+
+    if (!shouldAutoSaveProgress) {
+      pendingAutoSaveRef.current = false
+      return
+    }
+
+    autoSaveTimerRef.current = setTimeout(() => {
+      autoSaveTimerRef.current = null
+      void runAutoSave()
+    }, 800)
+
+    return clearPendingAutoSaveTimer
+  }, [
+    clearPendingAutoSaveTimer,
+    inputs,
+    runAutoSave,
+    selectedSlug,
+    shouldAutoSaveProgress,
+    totalScore,
+  ])
+
   function confirmLeaveIfNeeded(action: () => void) {
     if (saving) {
       return
     }
 
-    if (!isDirty || isLocked) {
+    if (!hasUnsavedDraftChanges || isLocked) {
       action()
       return
     }
 
     Alert.alert(
-      'Discard unsaved changes?',
-      'You have changes on this screen that have not been saved yet.',
+      'Discard unsynced changes?',
+      'You have draft changes on this screen that have not finished syncing yet.',
       [
         { text: 'Stay', style: 'cancel' },
         {
@@ -696,9 +990,13 @@ export default function ScoreScreen() {
     ]
   )
 
-  const savedStatusLabel = lastSavedAt
-    ? `Saved ${new Date(lastSavedAt).toLocaleDateString()}`
-    : 'Unsaved'
+  const savedStatusLabel = isAutoSaving
+    ? 'Syncing...'
+    : lastSavedAt && !isDirty
+      ? `Saved ${new Date(lastSavedAt).toLocaleDateString()}`
+      : lastDraftSavedAt && !hasUnsavedDraftChanges
+        ? 'Draft saved'
+        : 'Unsaved'
 
   const handleBackNavigation = useCallback(() => {
     performSafeBackNavigation({
@@ -708,7 +1006,7 @@ export default function ScoreScreen() {
       markBackNavigation: markTrackedBackNavigation,
       replace: (href) => router.replace(href),
     })
-  }, [router])
+  }, [])
 
   function confirmReset() {
     if (isLocked) {
@@ -803,6 +1101,13 @@ export default function ScoreScreen() {
 
   async function handleSaveScore() {
     try {
+      clearPendingAutoSaveTimer()
+      pendingAutoSaveRef.current = false
+
+      if (autoSavePromiseRef.current) {
+        await autoSavePromiseRef.current
+      }
+
       if (!effectiveSessionId) {
         Alert.alert('Missing session', 'Start or join a session before scoring.')
         router.replace('/')
@@ -841,51 +1146,31 @@ export default function ScoreScreen() {
 
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
       setSaving(true)
-
-      let ownerUserId: string | null = null
-      let scoredByUserId: string | null = null
-
-      if (isGuestMode || isAddedPlayerMode) {
-        const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser()
-
-        if (userError || !user) {
-          throw new Error('User not authenticated')
-        }
-
-        if (isAddedPlayerMode) {
-          // owner_user_id = the linked player; scored_by_user_id = me
-          ownerUserId = addedUserId
-          scoredByUserId = user.id
-        } else {
-          ownerUserId = user.id
-        }
-      }
-
-      await saveMyScore(effectiveSessionId, selectedDuke.slug, inputs, totalScore, {
-        guestMode: isGuestMode,
-        guestName: guestName || null,
-        guestProfileId: guestProfileId || null,
-        guestEntryId: guestEntryId || null,
-        ownerUserId,
-        scoredByUserId,
-        addedPlayerName: isAddedPlayerMode ? addedPlayerName || null : null,
-        lockScore: false,
-        includedInStats: false,
+      const normalizedCurrentInputs = normalizeScoreInputs(inputs)
+      const savedRow = await persistCommittedSnapshot({
+        sessionId: effectiveSessionId,
+        dukeSlug: selectedDuke.slug,
+        inputs: normalizedCurrentInputs,
+        totalScore,
       })
 
-      const now = new Date().toISOString()
-        setIsLocked(false)
-        setLastSavedAt(now)
-        setIsSubmittedLock(true)
-        setBaselineSlug(selectedDuke.slug)
-        setBaselineInputs(inputs)
-        void clearScoreDraft()
-        setSaveFeedback(
-          buildScoreSaveFeedback({
-            isGuestMode,
+      const now =
+        typeof savedRow?.updated_at === 'string' && savedRow.updated_at
+          ? savedRow.updated_at
+          : new Date().toISOString()
+      setIsLocked(false)
+      setLastSavedAt(now)
+      setLastDraftSavedAt('')
+      setIsSubmittedLock(true)
+      setBaselineSlug(selectedDuke.slug)
+      setBaselineInputs(normalizedCurrentInputs)
+      setDraftBaselineSlug(selectedDuke.slug)
+      setDraftBaselineInputs(normalizedCurrentInputs)
+      setCanSyncDraftToSupabase(true)
+      void clearScoreDraft()
+      setSaveFeedback(
+        buildScoreSaveFeedback({
+          isGuestMode,
           guestName,
           dukeName: selectedDuke.name,
         })
@@ -896,6 +1181,12 @@ export default function ScoreScreen() {
       setSaving(false)
     }
   }
+
+  useEffect(() => {
+    return () => {
+      clearPendingAutoSaveTimer()
+    }
+  }, [clearPendingAutoSaveTimer])
 
   function renderSection(title: string, items: StatMetaItem[]) {
     if (!items.length || !selectedDuke) return null
@@ -1231,12 +1522,12 @@ export default function ScoreScreen() {
             savedState={
               isLocked
                 ? 'locked'
-                : lastSavedAt
+                : lastSavedAt && !isDirty
                   ? 'saved'
                   : 'unsaved'
             }
             savedAtLabel={
-              lastSavedAt
+              lastSavedAt && !isDirty
                 ? `saved ${new Date(lastSavedAt).toLocaleDateString()}`
                 : undefined
             }
@@ -1270,9 +1561,11 @@ export default function ScoreScreen() {
                 : !selectedDuke
                   ? 'Select Duke'
                   : saving
-                    ? 'Saving…'
+                    ? 'Saving...'
+                    : isAutoSaving
+                      ? 'Syncing...'
                     : resolvingSession || loadingExisting
-                      ? 'Loading…'
+                      ? 'Loading...'
                       : isGuestMode
                         ? 'Save Guest Score & Compare'
                         : 'Save & Compare'}

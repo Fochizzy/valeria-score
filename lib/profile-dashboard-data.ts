@@ -24,6 +24,8 @@ type RawProfileGuestRow = {
   losses?: NumericValue
   topDuke?: string | null
   totalGames?: NumericValue
+  inProgressCount?: NumericValue
+  lastDraftUpdatedAt?: string | null
 } | null
 
 export type RawProfileDashboard = {
@@ -58,6 +60,8 @@ export type ProfileDashboard = {
       losses: number
       topDuke: string
       totalGames: number
+      inProgressCount: number
+      lastDraftUpdatedAt: string | null
     }
   }[]
 }
@@ -130,6 +134,8 @@ export function resolveProfileDashboard(
           losses: toNumber(row.losses),
           topDuke: normalizeText(row.topDuke) || '-',
           totalGames: toNumber(row.totalGames),
+          inProgressCount: toNumber(row.inProgressCount),
+          lastDraftUpdatedAt: row.lastDraftUpdatedAt ?? null,
         },
       })),
   }

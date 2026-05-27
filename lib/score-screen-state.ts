@@ -32,11 +32,13 @@ type ScoreDraftStorageKeyInput = {
   guestMode?: boolean
   guestProfileId?: string | null
   guestEntryId?: string | null
+  addedUserId?: string | null
 }
 
 type ScoreDraftState = {
   selectedSlug: string | null
   inputs: ScoreInputs
+  updatedAt: string
 }
 
 type ResolveLoadedScoreStateInput = {
@@ -48,6 +50,8 @@ type ResolveLoadedScoreStateInput = {
     isLocked?: boolean
     confirmedForCurrentRevision?: boolean
   } | null
+  remoteDraft?: ScoreDraftState | null
+  localDraft?: ScoreDraftState | null
   draft?: ScoreDraftState | null
   sessionFinished: boolean
 }
@@ -66,9 +70,67 @@ type ShouldRefreshScoreLockOnForegroundInput = {
   lockedEntries: number
 }
 
+type ShouldAutoSaveScoreProgressInput = {
+  sessionId: string | null | undefined
+  selectedSlug: string | null | undefined
+  isDirty: boolean
+  isLocked: boolean
+  resolvingSession: boolean
+  loadingExisting: boolean
+  isSavingManually: boolean
+  hasLoadError: boolean
+}
+
 function normalizeSlug(value: string | null | undefined) {
   const safeValue = String(value ?? '').trim()
   return safeValue || null
+}
+
+function normalizeDraftUpdatedAt(value: string | null | undefined) {
+  const safeValue = String(value ?? '').trim()
+  return safeValue || ''
+}
+
+function getTimestampValue(value: string | null | undefined) {
+  const parsedTimestamp = Date.parse(value ?? '')
+  return Number.isFinite(parsedTimestamp) ? parsedTimestamp : Number.NEGATIVE_INFINITY
+}
+
+function getDraftTimestampValue(draft: ScoreDraftState | null | undefined) {
+  return getTimestampValue(draft?.updatedAt)
+}
+
+function shouldResumePreferredDraft(
+  preferredDraft: ScoreDraftState | null,
+  existingScore: ResolveLoadedScoreStateInput['existingScore'],
+  hasCommittedScore: boolean
+) {
+  if (!preferredDraft) {
+    return false
+  }
+
+  if (!hasCommittedScore) {
+    return true
+  }
+
+  return getDraftTimestampValue(preferredDraft) > getTimestampValue(existingScore?.updatedAt)
+}
+
+export function pickPreferredScoreDraft(
+  remoteDraft: ScoreDraftState | null | undefined,
+  localDraft: ScoreDraftState | null | undefined
+) {
+  if (!remoteDraft) {
+    return localDraft ?? null
+  }
+
+  if (!localDraft) {
+    return remoteDraft
+  }
+
+  return getDraftTimestampValue(localDraft) > getDraftTimestampValue(remoteDraft)
+    ? localDraft
+    : remoteDraft
 }
 
 export function areScoreInputsEqual(a: ScoreInputs, b: ScoreInputs) {
@@ -126,6 +188,7 @@ export function buildScoreDraftStorageKey({
   guestMode,
   guestProfileId,
   guestEntryId,
+  addedUserId,
 }: ScoreDraftStorageKeyInput) {
   const safeSessionId = String(sessionId ?? '').trim()
 
@@ -133,7 +196,13 @@ export function buildScoreDraftStorageKey({
     return ''
   }
 
+  const safeAddedUserId = String(addedUserId ?? '').trim()
+
   if (!guestMode) {
+    if (safeAddedUserId) {
+      return `score-draft:${safeSessionId}:added-player:${safeAddedUserId}`
+    }
+
     return `score-draft:${safeSessionId}:player`
   }
 
@@ -154,11 +223,13 @@ export function parseStoredScoreDraft(value: string | null | undefined): ScoreDr
     const parsed = JSON.parse(rawValue) as {
       selectedSlug?: string | null
       inputs?: Partial<ScoreInputs>
+      updatedAt?: string | null
     }
 
     return {
       selectedSlug: normalizeSlug(parsed?.selectedSlug),
       inputs: normalizeScoreInputs(parsed?.inputs ?? {}),
+      updatedAt: normalizeDraftUpdatedAt(parsed?.updatedAt),
     }
   } catch {
     return null
@@ -191,65 +262,126 @@ export function shouldRefreshScoreLockOnForeground({
   return Boolean(safeSessionId) && !isLocked && isSessionFinished(totalEntries, lockedEntries)
 }
 
+export function shouldAutoSaveScoreProgress({
+  sessionId,
+  selectedSlug,
+  isDirty,
+  isLocked,
+  resolvingSession,
+  loadingExisting,
+  isSavingManually,
+  hasLoadError,
+}: ShouldAutoSaveScoreProgressInput) {
+  const safeSessionId = String(sessionId ?? '').trim()
+  const hasSelectedDuke = Boolean(normalizeSlug(selectedSlug))
+
+  return (
+    Boolean(safeSessionId) &&
+    hasSelectedDuke &&
+    isDirty &&
+    !isLocked &&
+    !resolvingSession &&
+    !loadingExisting &&
+    !isSavingManually &&
+    !hasLoadError
+  )
+}
+
 export function resolveLoadedScoreState({
   initialSlug,
   existingScore,
+  remoteDraft,
+  localDraft,
   draft,
   sessionFinished,
 }: ResolveLoadedScoreStateInput) {
-  const savedSlug = normalizeSlug(existingScore?.selectedSlug)
-  const hasSubmittedScore = Boolean(savedSlug) || Boolean(existingScore?.isLocked)
+  const empty = createEmptyInputs()
+  const committedBaselineSlug = normalizeSlug(existingScore?.selectedSlug)
+  const committedBaselineInputs = existingScore?.inputs ?? empty
+  const hasCommittedScore = Boolean(committedBaselineSlug) || Boolean(existingScore?.isLocked)
+  const needsResave =
+    existingScore?.confirmedForCurrentRevision === false &&
+    !sessionFinished &&
+    !Boolean(existingScore?.isLocked)
+  const nextLocalDraft = localDraft ?? draft ?? null
+  const preferredDraft = pickPreferredScoreDraft(remoteDraft, nextLocalDraft)
+  const shouldResumeDraft = shouldResumePreferredDraft(
+    preferredDraft,
+    existingScore,
+    hasCommittedScore
+  )
+  const lastCommittedAt =
+    hasCommittedScore && !needsResave ? normalizeDraftUpdatedAt(existingScore?.updatedAt) : ''
 
-  if (existingScore && hasSubmittedScore) {
-    const nextSlug = savedSlug ?? normalizeSlug(initialSlug)
-    const needsResave =
-      existingScore.confirmedForCurrentRevision === false &&
-      !sessionFinished &&
-      !Boolean(existingScore.isLocked)
+  if (sessionFinished) {
+    return {
+      selectedSlug: null,
+      inputs: empty,
+      committedBaselineSlug: null,
+      committedBaselineInputs: empty,
+      draftBaselineSlug: null,
+      draftBaselineInputs: empty,
+      lastCommittedAt: '',
+      lastDraftSavedAt: '',
+      isLocked: true,
+      baselineSlug: null,
+      baselineInputs: empty,
+      lastSavedAt: '',
+    }
+  }
+
+  if (shouldResumeDraft && preferredDraft) {
+    const nextDraftSlug = normalizeSlug(preferredDraft.selectedSlug)
+
+    return {
+      selectedSlug: nextDraftSlug,
+      inputs: preferredDraft.inputs,
+      committedBaselineSlug,
+      committedBaselineInputs,
+      draftBaselineSlug: nextDraftSlug,
+      draftBaselineInputs: preferredDraft.inputs,
+      lastCommittedAt,
+      lastDraftSavedAt: normalizeDraftUpdatedAt(preferredDraft.updatedAt),
+      isLocked: Boolean(existingScore?.isLocked),
+      baselineSlug: nextDraftSlug,
+      baselineInputs: preferredDraft.inputs,
+      lastSavedAt: '',
+    }
+  }
+
+  if (existingScore && (hasCommittedScore || needsResave)) {
+    const nextSlug = committedBaselineSlug ?? normalizeSlug(initialSlug)
 
     return {
       selectedSlug: nextSlug,
       inputs: existingScore.inputs,
+      committedBaselineSlug,
+      committedBaselineInputs: existingScore.inputs,
+      draftBaselineSlug: nextSlug,
+      draftBaselineInputs: existingScore.inputs,
+      lastCommittedAt,
+      lastDraftSavedAt: '',
+      isLocked: Boolean(existingScore.isLocked),
       baselineSlug: nextSlug,
       baselineInputs: existingScore.inputs,
-      lastSavedAt: needsResave ? '' : existingScore.updatedAt ?? '',
-      isLocked: sessionFinished || Boolean(existingScore.isLocked),
+      lastSavedAt: lastCommittedAt,
     }
   }
 
-  if (sessionFinished) {
-    const empty = createEmptyInputs()
-
-    return {
-      selectedSlug: null,
-      inputs: empty,
-      baselineSlug: null,
-      baselineInputs: empty,
-      lastSavedAt: '',
-      isLocked: true,
-    }
-  }
-
-  if (draft) {
-    return {
-      selectedSlug: normalizeSlug(draft.selectedSlug),
-      inputs: draft.inputs,
-      baselineSlug: null,
-      baselineInputs: createEmptyInputs(),
-      lastSavedAt: '',
-      isLocked: false,
-    }
-  }
-
-  const empty = createEmptyInputs()
   const nextInitialSlug = normalizeSlug(initialSlug)
 
   return {
     selectedSlug: nextInitialSlug,
     inputs: empty,
+    committedBaselineSlug: null,
+    committedBaselineInputs: empty,
+    draftBaselineSlug: null,
+    draftBaselineInputs: empty,
+    lastCommittedAt: '',
+    lastDraftSavedAt: '',
+    isLocked: false,
     baselineSlug: null,
     baselineInputs: empty,
     lastSavedAt: '',
-    isLocked: false,
   }
 }

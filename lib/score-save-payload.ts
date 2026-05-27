@@ -26,7 +26,16 @@ type BuildScoreSavePayloadInput = {
   updatedAt?: string
 }
 
-export function buildScoreSavePayload(input: BuildScoreSavePayloadInput) {
+export function buildScoreDraftPayload(input: BuildScoreSavePayloadInput) {
+  return {
+    draft_duke_slug: input.dukeSlug,
+    draft_inputs: input.inputs,
+    draft_score_total: input.totalScore,
+    draft_updated_at: input.updatedAt ?? new Date().toISOString(),
+  }
+}
+
+export function buildScoreCommitPayload(input: BuildScoreSavePayloadInput) {
   const payload: Record<string, unknown> = {
     session_id: input.sessionId,
     duke_slug: input.dukeSlug,
@@ -35,6 +44,10 @@ export function buildScoreSavePayload(input: BuildScoreSavePayloadInput) {
     game_locked: Boolean(input.lockScore),
     included_in_stats: Boolean(input.includedInStats),
     updated_at: input.updatedAt ?? new Date().toISOString(),
+    draft_duke_slug: null,
+    draft_inputs: null,
+    draft_score_total: null,
+    draft_updated_at: null,
   }
 
   if (Number.isFinite(input.confirmedRevision) && Number(input.confirmedRevision) > 0) {
@@ -62,3 +75,5 @@ export function buildScoreSavePayload(input: BuildScoreSavePayloadInput) {
 
   return payload
 }
+
+export const buildScoreSavePayload = buildScoreCommitPayload

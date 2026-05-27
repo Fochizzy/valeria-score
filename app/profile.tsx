@@ -33,11 +33,12 @@ import {
   resolveProfileDashboard,
   type ProfileDashboard,
 } from '../lib/profile-dashboard-data'
-import { buildProfilePlainLanguageInsights } from '../lib/p3-insights'
+import { buildProfilePlainLanguageInsights, buildSessionCardMeta } from '../lib/p3-insights'
 import { buildPlayerCategoryInsights, type CategoryInsight } from '../lib/category-insights'
 import { loadPlayerCategoryStats } from '../lib/player-category-fetch'
 import { buildProtectedAnalyticsAccessState } from '../lib/protected-analytics-access'
-import { clearActiveSessionState } from '../lib/sessions'
+import { getMyActiveTables, type InProgressSession } from '../lib/create-session'
+import { clearActiveSessionState, setActiveJoinCode, setActiveSessionId } from '../lib/sessions'
 import { supabase } from '../lib/supabase'
 
 const pageSurface = {
@@ -183,6 +184,7 @@ export default function ProfileScreen() {
   const [loadError, setLoadError] = useState('')
   const [viewerUserId, setViewerUserId] = useState<string | null | undefined>(undefined)
   const [categoryInsights, setCategoryInsights] = useState<CategoryInsight[]>([])
+  const [activeTables, setActiveTables] = useState<InProgressSession[]>([])
   const [frequentOpponents, setFrequentOpponents] = useState<FrequentOpponent[]>([])
   const [frequentOpponentsLoading, setFrequentOpponentsLoading] = useState(false)
   const didLoadOnceRef = useRef(false)
@@ -245,14 +247,22 @@ export default function ProfileScreen() {
       if (!user) {
         setDashboard(createEmptyProfileDashboard())
         setCategoryInsights([])
+        setActiveTables([])
         return
       }
 
-      const { data, error } = await supabase.rpc('get_profile_dashboard')
+      const [{ data, error }, nextActiveTables] = await Promise.all([
+        supabase.rpc('get_profile_dashboard'),
+        getMyActiveTables().catch((activeTablesError) => {
+          console.error('Failed to load active tables', activeTablesError)
+          return []
+        }),
+      ])
 
       if (error) throw error
 
       setDashboard(resolveProfileDashboard(data))
+      setActiveTables(nextActiveTables)
       didLoadOnceRef.current = true
 
       try {
@@ -287,6 +297,11 @@ export default function ProfileScreen() {
     if (viewingGuestProfile) return []
     return dashboard.history as SessionStat[]
   }, [dashboard.history, viewingGuestProfile])
+
+  const activeTablePreview = useMemo(
+    () => (viewingGuestProfile ? [] : activeTables.slice(0, 3)),
+    [activeTables, viewingGuestProfile]
+  )
 
   const summary = useMemo<ProfileSummary>(() => {
     if (viewingGuestProfile) return getGuestSummary(selectedGuest)
@@ -411,6 +426,25 @@ export default function ProfileScreen() {
       pathname: '/player-stats',
       params: { playerKey },
     })
+  }, [])
+
+  const resumeActiveTable = useCallback(async (session: InProgressSession) => {
+    try {
+      await Promise.all([
+        setActiveSessionId(String(session.id)),
+        setActiveJoinCode(String(session.join_code || '')),
+      ])
+
+      router.push({
+        pathname: '/score',
+        params: {
+          sessionId: String(session.id),
+          joinCode: String(session.join_code || ''),
+        },
+      })
+    } catch (err: any) {
+      Alert.alert('Resume failed', err?.message ?? 'Unknown error')
+    }
   }, [])
 
   const handleFrequentOpponentLongPress = useCallback(
@@ -546,6 +580,105 @@ export default function ProfileScreen() {
                   </View>
                 </View>
               </View>
+
+              {!viewingGuestProfile ? (
+                <View style={styles.sectionCard}>
+                  <View style={styles.sectionHeader}>
+                    <Text style={styles.sectionTitle}>Active Tables</Text>
+                    {activeTables.length > 0 ? (
+                      <Text style={styles.sectionMeta}>{activeTables.length} open</Text>
+                    ) : null}
+                  </View>
+
+                  {activeTables.length > 0 ? (
+                    <Text style={styles.sectionHint}>Hosted tables stay pinned first.</Text>
+                  ) : null}
+
+                  {activeTables.length === 0 ? (
+                    <View style={styles.emptyStateCard}>
+                      <Text style={styles.emptyTitle}>No active tables right now</Text>
+                      <Text style={styles.emptyText}>
+                        Create or join a table and it will stay linked to your profile until the
+                        game is finished.
+                      </Text>
+
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.emptySecondaryButton,
+                          pressed && styles.buttonPressed,
+                        ]}
+                        onPress={() => router.push('/create-session')}
+                      >
+                        <Text style={styles.emptySecondaryButtonText}>Open Game Hub</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <>
+                      {activeTablePreview.map((session) => {
+                        const meta = buildSessionCardMeta({
+                          playerCount: session.player_count,
+                          totalEntries: session.total_entries,
+                          lockedCount: session.locked_count,
+                        })
+
+                        return (
+                          <Pressable
+                            key={session.id}
+                            style={({ pressed }) => [
+                              styles.rowCard,
+                              pressed && styles.rowCardPressed,
+                            ]}
+                            onPress={() => {
+                              void resumeActiveTable(session)
+                            }}
+                          >
+                            <View style={styles.guestTopRow}>
+                              <View style={styles.guestMain}>
+                                <Text style={styles.rowTitle}>{session.join_code || 'No Code'}</Text>
+                                <Text style={styles.rowSub}>
+                                  {session.is_host ? 'Hosted by you' : 'Joined table'} · Updated{' '}
+                                  {formatDate(session.updated_at)}
+                                </Text>
+                              </View>
+
+                              <View
+                                style={[
+                                  styles.guestMiniPill,
+                                  session.is_host && styles.activeTableHostPill,
+                                ]}
+                              >
+                                <Text style={styles.guestMiniPillText}>
+                                  {session.is_host ? 'Host' : 'Joined'}
+                                </Text>
+                              </View>
+                            </View>
+
+                            <Text style={styles.guestDetail}>
+                              {meta.statusValue} · {session.locked_count} saved of{' '}
+                              {Math.max(session.expected_player_count ?? 0, session.total_entries, 2)}
+                            </Text>
+                            <Text style={styles.timelineDetail}>
+                              Tap to resume this table from score entry.
+                            </Text>
+                          </Pressable>
+                        )
+                      })}
+
+                      {activeTables.length > activeTablePreview.length ? (
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.emptySecondaryButton,
+                            pressed && styles.buttonPressed,
+                          ]}
+                          onPress={() => router.push('/create-session')}
+                        >
+                          <Text style={styles.emptySecondaryButtonText}>View All Tables</Text>
+                        </Pressable>
+                      ) : null}
+                    </>
+                  )}
+                </View>
+              ) : null}
 
               {!viewingGuestProfile ? (
                 <View style={styles.analyticsLinksRow}>
@@ -804,7 +937,7 @@ export default function ProfileScreen() {
                     <View style={styles.emptyStateCard}>
                       <Text style={styles.emptyTitle}>No shared guest profiles yet</Text>
                       <Text style={styles.emptyText}>
-                        Shared guests appear here after you add them while running a session.
+                        Guest profiles from your shared games will appear here after you finish a session with them.
                       </Text>
 
                       <Pressable
@@ -826,6 +959,11 @@ export default function ProfileScreen() {
                       const hasRealDisplayName = labels.subtitle !== null
                       const wins = Number(guest.stats.wins ?? 0)
                       const losses = Number(guest.stats.losses ?? 0)
+                      const inProgressCount = Number(guest.stats.inProgressCount ?? 0)
+                      const lastDraftUpdatedAt =
+                        typeof guest.stats.lastDraftUpdatedAt === 'string'
+                          ? guest.stats.lastDraftUpdatedAt
+                          : ''
 
                       return (
                         <Pressable
@@ -855,6 +993,22 @@ export default function ProfileScreen() {
                               </Text>
                             </View>
                           </View>
+
+                          {inProgressCount > 0 ? (
+                            <View style={styles.guestDraftBadgeRow}>
+                              <View style={styles.guestDraftBadge}>
+                                <Text style={styles.guestDraftBadgeText}>
+                                  {inProgressCount} in progress
+                                </Text>
+                              </View>
+
+                              {lastDraftUpdatedAt ? (
+                                <Text style={styles.guestDraftTimestamp}>
+                                  Updated {formatDate(lastDraftUpdatedAt)}
+                                </Text>
+                              ) : null}
+                            </View>
+                          ) : null}
 
                           <Text style={styles.guestDetail}>
                             {wins} {wins === 1 ? 'win' : 'wins'} · {losses}{' '}
@@ -1450,6 +1604,12 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
 
+  activeTableHostPill: {
+    backgroundColor: 'rgba(231, 199, 104, 0.22)',
+    borderWidth: 1,
+    borderColor: 'rgba(231, 199, 104, 0.38)',
+  },
+
   guestMiniPillText: {
     color: theme.colors.text,
     fontSize: 11,
@@ -1461,6 +1621,34 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     marginTop: 2,
+  },
+
+  guestDraftBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+
+  guestDraftBadge: {
+    backgroundColor: 'rgba(89, 183, 255, 0.16)',
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(89, 183, 255, 0.38)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+
+  guestDraftBadgeText: {
+    color: '#BEE5FF',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+
+  guestDraftTimestamp: {
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
   },
 
   returnToOwnButton: {

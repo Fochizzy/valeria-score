@@ -1,6 +1,9 @@
 import { supabase } from './supabase'
 import { normalizeScoreInputs, type ScoreInputs } from './scoring'
-import { buildScoreSavePayload } from './score-save-payload'
+import {
+  buildScoreCommitPayload,
+  buildScoreDraftPayload,
+} from './score-save-payload'
 import {
   applyScoreRowLookup,
   buildScoreRowLookup,
@@ -14,6 +17,10 @@ export type ExistingScoreRecord = {
   score_total: number | null
   inputs: ScoreInputs
   updated_at: string | null
+  draft_duke_slug: string | null
+  draft_score_total: number | null
+  draft_inputs: ScoreInputs
+  draft_updated_at: string | null
   game_locked: boolean
   included_in_stats: boolean
   confirmed_revision: number | null
@@ -54,6 +61,26 @@ export type SessionLockState = {
   lockedEntries: number
 }
 
+type SessionScoreRow = {
+  id: string | number
+  session_id: string | number
+  duke_slug?: string | null
+  score_total?: number | null
+  inputs?: unknown
+  updated_at?: string | null
+  draft_duke_slug?: string | null
+  draft_score_total?: number | null
+  draft_inputs?: unknown
+  draft_updated_at?: string | null
+  game_locked?: boolean | null
+  included_in_stats?: boolean | null
+  confirmed_revision?: number | null
+  guest_profile_id?: string | null
+  guest_entry_id?: string | null
+  player_name?: string | null
+  owner_user_id?: string | null
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -64,6 +91,30 @@ function normalizeInputsFromDb(value: unknown): ScoreInputs {
   }
 
   return normalizeScoreInputs(value as Partial<ScoreInputs>)
+}
+
+function mapExistingScoreRecord(data: SessionScoreRow): ExistingScoreRecord {
+  return {
+    id: String(data.id),
+    session_id: String(data.session_id),
+    duke_slug: data.duke_slug ?? null,
+    score_total: typeof data.score_total === 'number' ? data.score_total : null,
+    inputs: normalizeInputsFromDb(data.inputs),
+    updated_at: data.updated_at ?? null,
+    draft_duke_slug: data.draft_duke_slug ?? null,
+    draft_score_total:
+      typeof data.draft_score_total === 'number' ? data.draft_score_total : null,
+    draft_inputs: normalizeInputsFromDb(data.draft_inputs),
+    draft_updated_at: data.draft_updated_at ?? null,
+    game_locked: Boolean(data.game_locked),
+    included_in_stats: Boolean(data.included_in_stats),
+    confirmed_revision:
+      typeof data.confirmed_revision === 'number' ? data.confirmed_revision : 1,
+    guest_profile_id: data.guest_profile_id ?? null,
+    guest_entry_id: data.guest_entry_id ?? null,
+    player_name: data.player_name ?? null,
+    owner_user_id: data.owner_user_id ?? null,
+  }
 }
 
 async function getAuthedUserId(): Promise<string | null> {
@@ -133,12 +184,13 @@ async function findExistingScoreId(
   return row?.id ? String(row.id) : null
 }
 
-export async function loadMyExistingScore(
-  sessionId: string,
-  options: LoadScoreOptions = {}
-): Promise<ExistingScoreRecord | null> {
-  if (!sessionId) return null
-
+async function resolveSaveLookup(
+  options: SaveScoreOptions
+): Promise<{
+  guestMode: boolean
+  lookup: ScoreRowLookup
+  ownerUserId: string | null
+}> {
   const guestMode = Boolean(options.guestMode)
 
   if (guestMode) {
@@ -149,86 +201,94 @@ export async function loadMyExistingScore(
     })
 
     if (!lookup) {
-      return null
+      throw new Error('Missing guest identifier')
     }
 
-    const data = await loadLatestScoreRow(sessionId, lookup)
-    if (!data) return null
-
     return {
-      id: String(data.id),
-      session_id: String(data.session_id),
-      duke_slug: data.duke_slug ?? null,
-      score_total: typeof data.score_total === 'number' ? data.score_total : null,
-      inputs: normalizeInputsFromDb(data.inputs),
-      updated_at: data.updated_at ?? null,
-      game_locked: Boolean(data.game_locked),
-      included_in_stats: Boolean(data.included_in_stats),
-      confirmed_revision:
-        typeof data.confirmed_revision === 'number' ? data.confirmed_revision : 1,
-      guest_profile_id: data.guest_profile_id ?? null,
-      guest_entry_id: data.guest_entry_id ?? null,
-      player_name: data.player_name ?? null,
-      owner_user_id: data.owner_user_id ?? null,
+      guestMode: true,
+      lookup,
+      ownerUserId: options.ownerUserId ?? null,
     }
   }
 
-  // Phase 3 added-player mode: the caller is scoring on behalf of a
-  // registered player they added. Look up the row by owner_user_id rather
-  // than auth.uid().
-  if (options.addedUserId) {
-    const lookup = buildScoreRowLookup({ ownerUserId: options.addedUserId })
-    if (!lookup) return null
+  const ownerUserId = options.ownerUserId ?? (await getAuthedUserId())
 
-    const data = await loadLatestScoreRow(sessionId, lookup)
-    if (!data) return null
-
-    return {
-      id: String(data.id),
-      session_id: String(data.session_id),
-      duke_slug: data.duke_slug ?? null,
-      score_total: typeof data.score_total === 'number' ? data.score_total : null,
-      inputs: normalizeInputsFromDb(data.inputs),
-      updated_at: data.updated_at ?? null,
-      game_locked: Boolean(data.game_locked),
-      included_in_stats: Boolean(data.included_in_stats),
-      confirmed_revision:
-        typeof data.confirmed_revision === 'number' ? data.confirmed_revision : 1,
-      guest_profile_id: data.guest_profile_id ?? null,
-      guest_entry_id: data.guest_entry_id ?? null,
-      player_name: data.player_name ?? null,
-      owner_user_id: data.owner_user_id ?? null,
-    }
+  if (!ownerUserId) {
+    throw new Error('User not authenticated')
   }
-
-  const userId = await getAuthedUserId()
-  if (!userId) return null
 
   const lookup = buildScoreRowLookup({
-    ownerUserId: userId,
+    ownerUserId,
   })
+
+  if (!lookup) {
+    throw new Error('User not authenticated')
+  }
+
+  return {
+    guestMode: false,
+    lookup,
+    ownerUserId,
+  }
+}
+
+async function updateSessionScoreRow(rowId: string, payload: Record<string, unknown>) {
+  const { data, error } = await supabase
+    .from('session_scores')
+    .update(payload)
+    .eq('id', rowId)
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
+
+async function insertSessionScoreRow(payload: Record<string, unknown>) {
+  const { data, error } = await supabase
+    .from('session_scores')
+    .insert(payload)
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
+
+export async function loadMyExistingScore(
+  sessionId: string,
+  options: LoadScoreOptions = {}
+): Promise<ExistingScoreRecord | null> {
+  if (!sessionId) return null
+
+  let lookup: ScoreRowLookup | null = null
+
+  if (options.guestMode) {
+    lookup = buildScoreRowLookup({
+      guestMode: true,
+      guestEntryId: options.guestEntryId,
+      guestProfileId: options.guestProfileId,
+    })
+  } else if (options.addedUserId) {
+    // Phase 3 added-player mode: the caller is scoring on behalf of a
+    // registered player they added. Look up the row by owner_user_id rather
+    // than auth.uid().
+    lookup = buildScoreRowLookup({ ownerUserId: options.addedUserId })
+  } else {
+    const userId = await getAuthedUserId()
+    if (!userId) return null
+
+    lookup = buildScoreRowLookup({
+      ownerUserId: userId,
+    })
+  }
 
   if (!lookup) return null
 
   const data = await loadLatestScoreRow(sessionId, lookup)
   if (!data) return null
 
-  return {
-    id: String(data.id),
-    session_id: String(data.session_id),
-    duke_slug: data.duke_slug ?? null,
-    score_total: typeof data.score_total === 'number' ? data.score_total : null,
-    inputs: normalizeInputsFromDb(data.inputs),
-    updated_at: data.updated_at ?? null,
-    game_locked: Boolean(data.game_locked),
-    included_in_stats: Boolean(data.included_in_stats),
-    confirmed_revision:
-      typeof data.confirmed_revision === 'number' ? data.confirmed_revision : 1,
-    guest_profile_id: data.guest_profile_id ?? null,
-    guest_entry_id: data.guest_entry_id ?? null,
-    player_name: data.player_name ?? null,
-    owner_user_id: data.owner_user_id ?? null,
-  }
+  return mapExistingScoreRecord(data as SessionScoreRow)
 }
 
 export async function loadSessionLockState(
@@ -259,7 +319,7 @@ export async function loadSessionLockState(
   }
 }
 
-export async function saveMyScore(
+export async function saveMyScoreDraft(
   sessionId: string,
   dukeSlug: string,
   inputs: ScoreInputs,
@@ -274,113 +334,72 @@ export async function saveMyScore(
     throw new Error('Missing duke slug')
   }
 
-  const guestMode = Boolean(options.guestMode)
   const normalizedInputs = normalizeScoreInputs(inputs)
-  const confirmedRevision = await loadSessionScoreRevision(sessionId)
+  const { lookup } = await resolveSaveLookup(options)
+  const existingId = await findExistingScoreId(sessionId, lookup)
 
-  if (guestMode) {
-    const payload = buildScoreSavePayload({
-      sessionId,
-      dukeSlug,
-      inputs: normalizedInputs,
-      totalScore,
-      guestMode: true,
-      guestName: options.guestName,
-      guestProfileId: options.guestProfileId,
-      guestEntryId: options.guestEntryId,
-      ownerUserId: options.ownerUserId,
-      lockScore: options.lockScore,
-      includedInStats: options.includedInStats,
-      confirmedRevision,
-    })
-
-    const lookup = buildScoreRowLookup({
-      guestMode: true,
-      guestEntryId: options.guestEntryId,
-      guestProfileId: options.guestProfileId,
-    })
-
-    if (!lookup) {
-      throw new Error('Missing guest identifier')
-    }
-
-    const existingId = await findExistingScoreId(sessionId, lookup)
-
-    if (existingId) {
-      const { data, error } = await supabase
-        .from('session_scores')
-        .update(payload)
-        .eq('id', existingId)
-        .select()
-        .single()
-
-      if (error) throw error
-      return data
-    }
-
-    const { data, error } = await supabase
-      .from('session_scores')
-      .insert(payload)
-      .select()
-      .single()
-
-    if (error) throw error
-    return data
+  if (!existingId) {
+    throw new Error('Missing seat row for draft autosave.')
   }
 
-  const userId = options.ownerUserId ?? (await getAuthedUserId())
-  if (!userId) {
-    throw new Error('User not authenticated')
-  }
-
-  const payload = buildScoreSavePayload({
+  const payload = buildScoreDraftPayload({
     sessionId,
     dukeSlug,
     inputs: normalizedInputs,
     totalScore,
-    ownerUserId: userId,
+  })
+
+  return updateSessionScoreRow(existingId, payload)
+}
+
+export async function saveMyScoreCommit(
+  sessionId: string,
+  dukeSlug: string,
+  inputs: ScoreInputs,
+  totalScore: number,
+  options: SaveScoreOptions = {}
+) {
+  if (!sessionId) {
+    throw new Error('Missing session id')
+  }
+
+  if (!dukeSlug) {
+    throw new Error('Missing duke slug')
+  }
+
+  const normalizedInputs = normalizeScoreInputs(inputs)
+  const confirmedRevision = await loadSessionScoreRevision(sessionId)
+  const { guestMode, lookup, ownerUserId } = await resolveSaveLookup(options)
+  const payload = buildScoreCommitPayload({
+    sessionId,
+    dukeSlug,
+    inputs: normalizedInputs,
+    totalScore,
+    guestMode,
+    guestName: options.guestName,
+    guestProfileId: options.guestProfileId,
+    guestEntryId: options.guestEntryId,
+    ownerUserId,
     // Phase 3: when scoring on behalf of an added player, the caller is
     // not the row's owner_user_id. Explicitly stamp scored_by_user_id with
     // the editor so RLS lets the write through and the editor stays the
     // adder for future updates.
-    scoredByUserId: options.scoredByUserId ?? null,
-    addedPlayerName: options.addedPlayerName ?? null,
+    scoredByUserId: guestMode ? null : options.scoredByUserId ?? null,
+    addedPlayerName: guestMode ? null : options.addedPlayerName ?? null,
     lockScore: options.lockScore,
     includedInStats: options.includedInStats,
     confirmedRevision,
   })
-
-  const lookup = buildScoreRowLookup({
-    ownerUserId: userId,
-  })
-
-  if (!lookup) {
-    throw new Error('User not authenticated')
-  }
-
   const existingId = await findExistingScoreId(sessionId, lookup)
 
   if (existingId) {
-    const { data, error } = await supabase
-      .from('session_scores')
-      .update(payload)
-      .eq('id', existingId)
-      .select()
-      .single()
-
-    if (error) throw error
-    return data
+    return updateSessionScoreRow(existingId, payload)
   }
 
-  const { data, error } = await supabase
-    .from('session_scores')
-    .insert(payload)
-    .select()
-    .single()
-
-  if (error) throw error
-  return data
+  return insertSessionScoreRow(payload)
 }
+
+export const saveMyScore = saveMyScoreCommit
 
 export async function setMyScoreLocked(
   sessionId: string,
