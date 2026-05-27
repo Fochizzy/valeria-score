@@ -28,6 +28,10 @@ import {
 import { buildAddedPlayerScoreRoute } from '../lib/added-player-score-route'
 import { buildGuestScoreRoute } from '../lib/guest-score-route'
 import { normalizePlayerId } from '../lib/player-id'
+import {
+  getTrackedPreviousRoute,
+  markTrackedBackNavigation,
+} from '../lib/route-history'
 import { resolveSessionRouteContext } from '../lib/session-route-context'
 import { Alert } from '../lib/themed-alert'
 import {
@@ -35,7 +39,7 @@ import {
   getActiveJoinCode,
   getActiveSessionId,
 } from '../lib/sessions'
-import { getBottomNavTopClearance } from '../lib/bottom-nav-layout'
+import { getBottomNavClearance } from '../lib/bottom-nav-layout'
 import { theme } from '../constants/theme'
 
 type GuestProfile = {
@@ -187,7 +191,9 @@ export default function GuestPlayerScreen() {
           performSafeBackNavigation({
             canGoBack: router.canGoBack(),
             fallbackHref: compareFallbackHref,
+            previousHref: getTrackedPreviousRoute(),
             back: () => router.back(),
+            markBackNavigation: markTrackedBackNavigation,
             replace: (href) => router.replace(href),
           }),
       },
@@ -320,7 +326,9 @@ export default function GuestPlayerScreen() {
               performSafeBackNavigation({
                 canGoBack: router.canGoBack(),
                 fallbackHref: compareFallbackHref,
+                previousHref: getTrackedPreviousRoute(),
                 back: () => router.back(),
+                markBackNavigation: markTrackedBackNavigation,
                 replace: (href) => router.replace(href),
               }),
           },
@@ -391,7 +399,7 @@ export default function GuestPlayerScreen() {
       >
         <ScrollView
           style={styles.container}
-          contentContainerStyle={[styles.content, { paddingTop: getBottomNavTopClearance(insets.top) }]}
+          contentContainerStyle={[styles.content, { paddingBottom: getBottomNavClearance(insets.bottom) }]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="always"
           keyboardDismissMode="none"

@@ -1,0 +1,1 @@
+This folder contains an app that is meant to be a game Campaign for Valeria Card Kingdoms.

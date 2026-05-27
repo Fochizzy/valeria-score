@@ -9,6 +9,7 @@ type Props = {
   onPressPlayerStats: () => void
   onPressDukeStats: () => void
   onPressGlobalTrends: () => void
+  onPressSoloStats: () => void
 }
 
 const LINKS = [
@@ -32,10 +33,17 @@ const LINKS = [
   },
 ] as const
 
+const SOLO_LINK = {
+  kicker: 'Campaign',
+  title: 'Solo Statistics',
+  sub: 'Split solo wins, losses, and duke trends.',
+}
+
 export default function CompareStatsRow({
   onPressPlayerStats,
   onPressDukeStats,
   onPressGlobalTrends,
+  onPressSoloStats,
 }: Props) {
   const handlerByKey: Record<(typeof LINKS)[number]['key'], () => void> = {
     playerStats: onPressPlayerStats,
@@ -44,30 +52,48 @@ export default function CompareStatsRow({
   }
 
   return (
-    <View style={styles.row}>
-      {LINKS.map((link) => (
-        <Pressable
-          key={link.key}
-          style={({ pressed }) => [
-            styles.card,
-            pressed && styles.cardPressed,
-          ]}
-          onPress={handlerByKey[link.key]}
-        >
-          <Text style={styles.kicker}>{link.kicker}</Text>
-          <Text style={styles.title} numberOfLines={2}>{link.title}</Text>
-          <Text style={styles.sub} numberOfLines={2}>{link.sub}</Text>
-        </Pressable>
-      ))}
+    <View style={styles.stack}>
+      <View style={styles.row}>
+        {LINKS.map((link) => (
+          <Pressable
+            key={link.key}
+            style={({ pressed }) => [
+              styles.card,
+              pressed && styles.cardPressed,
+            ]}
+            onPress={handlerByKey[link.key]}
+          >
+            <Text style={styles.kicker}>{link.kicker}</Text>
+            <Text style={styles.title} numberOfLines={2}>{link.title}</Text>
+            <Text style={styles.sub} numberOfLines={2}>{link.sub}</Text>
+          </Pressable>
+        ))}
+      </View>
+
+      <Pressable
+        style={({ pressed }) => [
+          styles.card,
+          styles.soloCard,
+          pressed && styles.cardPressed,
+        ]}
+        onPress={onPressSoloStats}
+      >
+        <Text style={styles.kicker}>{SOLO_LINK.kicker}</Text>
+        <Text style={styles.title}>{SOLO_LINK.title}</Text>
+        <Text style={styles.sub}>{SOLO_LINK.sub}</Text>
+      </Pressable>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
+  stack: {
+    marginBottom: 16,
+  },
+
   row: {
     flexDirection: 'row',
     gap: 10,
-    marginBottom: 16,
   },
 
   card: {
@@ -82,6 +108,10 @@ const styles = StyleSheet.create({
   cardPressed: {
     opacity: 0.92,
     transform: [{ scale: 0.98 }],
+  },
+
+  soloCard: {
+    marginTop: 10,
   },
 
   kicker: {

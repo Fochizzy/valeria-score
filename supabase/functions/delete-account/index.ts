@@ -182,6 +182,14 @@ Deno.serve(async (req) => {
         const { error } = await admin.from('guest_profiles').delete().eq('owner_user_id', safeUserId)
         if (error) throw error
       },
+      deleteSoloGameResultsByOwnerUserId: async (safeUserId) => {
+        const { error } = await admin
+          .from('solo_game_results')
+          .delete()
+          .eq('owner_user_id', safeUserId)
+
+        if (error) throw error
+      },
       deleteProfileById: async (safeUserId) => {
         const { error } = await admin.from('profiles').delete().eq('id', safeUserId)
         if (error) throw error

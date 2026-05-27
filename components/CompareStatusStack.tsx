@@ -38,7 +38,7 @@ export default function CompareStatusStack({
               {leader.label}
               {leader.playerId ? ` (${leader.playerId})` : ''}
             </Text>
-            <Text style={styles.leaderStripSub}>{`${leader.totalScore} - ${leader.dukeName}`}</Text>
+            <Text style={styles.leaderStripSub}>{`Score Finalized · ${leader.dukeName}`}</Text>
           </View>
         </View>
       ) : null}

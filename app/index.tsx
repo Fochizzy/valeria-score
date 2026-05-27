@@ -11,6 +11,7 @@ import { router, useNavigation } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { ensureProfileRow, getMyProfile } from '../lib/profile'
+import { discardCurrentTrackedRoute } from '../lib/route-history'
 import { theme } from '../constants/theme'
 
 const logo = require('../assets/valeria_logo.png')
@@ -48,10 +49,12 @@ export default function IndexScreen() {
         if (!mounted) return
 
         if (!profile?.public_player_id) {
+          discardCurrentTrackedRoute()
           router.replace('/choose-player-id')
           return
         }
 
+        discardCurrentTrackedRoute()
         router.replace('/create-session')
       } catch (error) {
         console.error('Bootstrap failed', error)

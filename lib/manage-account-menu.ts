@@ -4,6 +4,7 @@ export type ManageAccountMenuActionId =
   | 'dukeStatistics'
   | 'playerStatistics'
   | 'globalTrends'
+  | 'soloStatistics'
   | 'logout'
   | 'deleteSession'
   | 'cancel'
@@ -27,6 +28,7 @@ export type BoundManageAccountMenuHandlers = {
   onDukeStatistics?: () => void
   onPlayerStatistics?: () => void
   onGlobalTrends?: () => void
+  onSoloStatistics?: () => void
 }
 
 export const manageAccountAlertCopy = Object.freeze({
@@ -55,11 +57,12 @@ export function buildManageAccountMenuActions(
   // Logout is intentionally last so the destructive action sits at the bottom
   // of the modal, separated from the navigation actions above it.
   const actions: ManageAccountMenuAction[] = [
-    { id: 'newSession', text: 'Home Page' },
+    { id: 'newSession', text: 'Game Hub' },
     { id: 'manageData', text: 'Manage Data' },
     { id: 'dukeStatistics', text: 'Duke Statistics' },
     { id: 'playerStatistics', text: 'Player Statistics' },
     { id: 'globalTrends', text: 'Global Trends' },
+    { id: 'soloStatistics', text: 'Solo Statistics' },
   ]
 
   if (options.includeDeleteSession) {
@@ -104,6 +107,11 @@ export function buildBoundManageAccountMenuActions(
       case 'globalTrends':
         if (handlers.onGlobalTrends) {
           actions.push({ ...action, onPress: handlers.onGlobalTrends })
+        }
+        break
+      case 'soloStatistics':
+        if (handlers.onSoloStatistics) {
+          actions.push({ ...action, onPress: handlers.onSoloStatistics })
         }
         break
       case 'logout':

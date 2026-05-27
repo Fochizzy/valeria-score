@@ -51,7 +51,7 @@ import {
   manageAccountAlertCopy,
   manageAccountHeaderProps,
 } from '../lib/manage-account-menu'
-import { getBottomNavTopClearance } from '../lib/bottom-nav-layout'
+import { getBottomNavClearance } from '../lib/bottom-nav-layout'
 import { logoutAndClearActiveSessionState } from '../lib/logout'
 import {
   buildProtectedAnalyticsAccessState,
@@ -434,6 +434,7 @@ export default function DukeStatsScreen() {
         onDukeStatistics: () => router.push('/duke-stats'),
         onPlayerStatistics: () => router.push('/player-stats'),
         onGlobalTrends: () => router.push('/global-trends'),
+        onSoloStatistics: () => router.push('/solo-stats' as never),
         onLogout: () => {
           void handleLogout()
         },
@@ -450,7 +451,7 @@ export default function DukeStatsScreen() {
         return
       }
 
-      router.push(nextSegment.href)
+      router.push(nextSegment.href as never)
     },
     [analyticsRouteSegments]
   )
@@ -614,7 +615,7 @@ export default function DukeStatsScreen() {
       <View style={styles.pageScrim}>
         <ScrollView
           style={styles.container}
-          contentContainerStyle={[styles.content, { paddingTop: getBottomNavTopClearance(insets.top) }]}
+          contentContainerStyle={[styles.content, { paddingBottom: getBottomNavClearance(insets.bottom) }]}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}

@@ -59,4 +59,6 @@ tmp-*
 
 # Claude / AI agent artifacts
 .agents/
+.superpowers/
 skills-lock.json
+/eas

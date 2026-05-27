@@ -68,6 +68,7 @@ const styles = StyleSheet.create({
   logoFrame: {
     width: 176,
     height: 96,
+    alignSelf: 'center',
     borderRadius: 20,
     borderWidth: 1,
     borderColor: theme.colors.borderSoft,

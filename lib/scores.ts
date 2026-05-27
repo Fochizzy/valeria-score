@@ -16,6 +16,7 @@ export type ExistingScoreRecord = {
   updated_at: string | null
   game_locked: boolean
   included_in_stats: boolean
+  confirmed_revision: number | null
   guest_profile_id: string | null
   guest_entry_id: string | null
   player_name: string | null
@@ -73,6 +74,27 @@ async function getAuthedUserId(): Promise<string | null> {
 
   if (error || !user) return null
   return user.id
+}
+
+export async function loadSessionScoreRevision(sessionId: string): Promise<number> {
+  const { data, error } = await supabase
+    .from('game_sessions')
+    .select('score_revision')
+    .eq('id', sessionId)
+    .maybeSingle()
+
+  if (error) {
+    if (
+      error.message?.includes('score_revision') ||
+      error.message?.includes('column score_revision does not exist')
+    ) {
+      return 1
+    }
+
+    throw error
+  }
+
+  return Math.max(1, Number((data as { score_revision?: number | null } | null)?.score_revision ?? 1))
 }
 
 async function loadLatestScoreRow(
@@ -142,6 +164,8 @@ export async function loadMyExistingScore(
       updated_at: data.updated_at ?? null,
       game_locked: Boolean(data.game_locked),
       included_in_stats: Boolean(data.included_in_stats),
+      confirmed_revision:
+        typeof data.confirmed_revision === 'number' ? data.confirmed_revision : 1,
       guest_profile_id: data.guest_profile_id ?? null,
       guest_entry_id: data.guest_entry_id ?? null,
       player_name: data.player_name ?? null,
@@ -168,6 +192,8 @@ export async function loadMyExistingScore(
       updated_at: data.updated_at ?? null,
       game_locked: Boolean(data.game_locked),
       included_in_stats: Boolean(data.included_in_stats),
+      confirmed_revision:
+        typeof data.confirmed_revision === 'number' ? data.confirmed_revision : 1,
       guest_profile_id: data.guest_profile_id ?? null,
       guest_entry_id: data.guest_entry_id ?? null,
       player_name: data.player_name ?? null,
@@ -196,6 +222,8 @@ export async function loadMyExistingScore(
     updated_at: data.updated_at ?? null,
     game_locked: Boolean(data.game_locked),
     included_in_stats: Boolean(data.included_in_stats),
+    confirmed_revision:
+      typeof data.confirmed_revision === 'number' ? data.confirmed_revision : 1,
     guest_profile_id: data.guest_profile_id ?? null,
     guest_entry_id: data.guest_entry_id ?? null,
     player_name: data.player_name ?? null,
@@ -248,6 +276,7 @@ export async function saveMyScore(
 
   const guestMode = Boolean(options.guestMode)
   const normalizedInputs = normalizeScoreInputs(inputs)
+  const confirmedRevision = await loadSessionScoreRevision(sessionId)
 
   if (guestMode) {
     const payload = buildScoreSavePayload({
@@ -262,6 +291,7 @@ export async function saveMyScore(
       ownerUserId: options.ownerUserId,
       lockScore: options.lockScore,
       includedInStats: options.includedInStats,
+      confirmedRevision,
     })
 
     const lookup = buildScoreRowLookup({
@@ -317,6 +347,7 @@ export async function saveMyScore(
     addedPlayerName: options.addedPlayerName ?? null,
     lockScore: options.lockScore,
     includedInStats: options.includedInStats,
+    confirmedRevision,
   })
 
   const lookup = buildScoreRowLookup({

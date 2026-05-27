@@ -1,4 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { router } from 'expo-router'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useFocusEffect } from '@react-navigation/native'
@@ -17,21 +18,40 @@ import ActionDialogModal, {
   type ActionDialogModalAction,
 } from '../components/ActionDialogModal'
 import { theme } from '../constants/theme'
-import { copyJoinCodeWithFeedback } from '../lib/copy-join-code-client'
 import { getGuestProfileLabels } from '../lib/guest-profile-identity'
+import {
+  buildManageDataHistoryItems,
+  type ManageDataHistoryItem,
+  type ManageDataSoloHistoryItem,
+} from '../lib/manage-data-history'
 import {
   deleteMyAccountAndData,
   deleteGuestProfile as deleteGuestProfileRpc,
   leaveAllGames as leaveAllGamesRpc,
   leaveOwnedOrJoinedGame as leaveOwnedOrJoinedGameRpc,
   deleteOwnedGame as deleteOwnedGameRpc,
+  reopenFinishedGame as reopenFinishedGameRpc,
 } from '../lib/manage'
 import { buildDangerFlowCopy } from '../lib/p3-feedback'
 import {
   buildSessionParticipationSummaries,
   filterCompletedSessions,
 } from '../lib/session-participation-state'
-import { clearActiveSessionState } from '../lib/sessions'
+import {
+  clearActiveSessionState,
+  setActiveJoinCode,
+  setActiveSessionId,
+} from '../lib/sessions'
+import {
+  getSoloVictoryConditionCopy,
+  normalizeSoloDraft,
+  SOLO_DRAFT_STORAGE_KEY,
+} from '../lib/solo-mode'
+import {
+  deleteSoloGameResult,
+  loadSoloResults,
+  type SoloGameResultRow,
+} from '../lib/solo-stats'
 import { supabase } from '../lib/supabase'
 import { Alert } from '../lib/themed-alert'
 
@@ -57,17 +77,51 @@ type SessionRow = {
   is_host: boolean
 }
 
+function formatHistoryDate(value: string | null | undefined) {
+  if (!value) return null
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return null
+  return parsed.toLocaleString()
+}
+
+function buildHistoryCardCopy(item: ManageDataHistoryItem) {
+  if (item.kind === 'session') {
+    return {
+      label: item.isHost ? 'Hosted Game' : 'Joined Game',
+      title: item.joinCode ? `Join Code ${item.joinCode}` : 'Completed Game',
+      subtitle: item.updatedAt ? `Finished ${formatHistoryDate(item.updatedAt)}` : item.id,
+    }
+  }
+
+  const savedAt = formatHistoryDate(item.updatedAt ?? item.createdAt)
+  const winnerCopy = item.winner === 'player' ? 'Player victory' : 'Dark Lord victory'
+
+  return {
+    label: 'Solo Game',
+    title: getSoloVictoryConditionCopy(item.victoryCondition)?.title ?? 'Solo Result',
+    subtitle: savedAt ? `${winnerCopy} · Saved ${savedAt}` : winnerCopy,
+  }
+}
+
 export default function ManageDataScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [working, setWorking] = useState(false)
   const [guestProfiles, setGuestProfiles] = useState<GuestProfileRow[]>([])
   const [completedSessions, setCompletedSessions] = useState<SessionRow[]>([])
-  const [selectedSession, setSelectedSession] = useState<SessionRow | null>(null)
-  const longPressSessionIdRef = useRef<string | null>(null)
+  const [soloResults, setSoloResults] = useState<SoloGameResultRow[]>([])
+  const [selectedHistoryItem, setSelectedHistoryItem] = useState<ManageDataHistoryItem | null>(
+    null
+  )
+  const longPressHistoryIdRef = useRef<string | null>(null)
   const didFocusRefreshRef = useRef(false)
 
   const guestCount = useMemo(() => guestProfiles.length, [guestProfiles])
-  const sessionCount = useMemo(() => completedSessions.length, [completedSessions])
+  const historyItems = useMemo(
+    () => buildManageDataHistoryItems({ completedSessions, soloResults }),
+    [completedSessions, soloResults]
+  )
+  const sessionCount = useMemo(() => historyItems.length, [historyItems])
 
   const load = useCallback(async () => {
     try {
@@ -77,7 +131,11 @@ export default function ManageDataScreen() {
       } = await supabase.auth.getUser()
 
       if (userError || !user) throw new Error('No authenticated user')
-      const [{ data: guests, error: guestsError }, { data: memberships, error: membershipError }] =
+      const [
+        { data: guests, error: guestsError },
+        { data: memberships, error: membershipError },
+        nextSoloResults,
+      ] =
         await Promise.all([
           supabase
             .from('guest_profiles')
@@ -88,6 +146,7 @@ export default function ManageDataScreen() {
             .from('session_players')
             .select('session_id')
             .eq('user_id', user.id),
+          loadSoloResults(user.id),
         ])
 
       if (guestsError) throw guestsError
@@ -152,6 +211,7 @@ export default function ManageDataScreen() {
 
       setGuestProfiles((guests ?? []) as GuestProfileRow[])
       setCompletedSessions(sessions)
+      setSoloResults(nextSoloResults)
     } catch (err: any) {
       Alert.alert('Load failed', err?.message ?? 'Unknown error')
     }
@@ -233,10 +293,6 @@ export default function ManageDataScreen() {
     [load]
   )
 
-  const handleCopyJoinCode = useCallback(async (joinCode: string | null) => {
-    await copyJoinCodeWithFeedback(joinCode)
-  }, [])
-
   const handleOpenRecap = useCallback((session: SessionRow) => {
     const target = session.join_code
       ? {
@@ -255,6 +311,33 @@ export default function ManageDataScreen() {
 
     router.push(target as never)
   }, [])
+
+  const handleEditSoloGame = useCallback((soloGame: ManageDataSoloHistoryItem) => {
+    router.push({
+      pathname: '/solo-score',
+      params: {
+        soloGameId: soloGame.id,
+      },
+    } as never)
+  }, [])
+
+  const handleOpenHistoryItem = useCallback(
+    (item: ManageDataHistoryItem) => {
+      if (item.kind === 'session') {
+        handleOpenRecap({
+          id: item.id,
+          join_code: item.joinCode,
+          created_at: item.createdAt,
+          updated_at: item.updatedAt,
+          is_host: item.isHost,
+        })
+        return
+      }
+
+      handleEditSoloGame(item)
+    },
+    [handleEditSoloGame, handleOpenRecap]
+  )
 
   const handleDeleteMyInvolvement = useCallback(
     async (session: SessionRow) => {
@@ -278,6 +361,84 @@ export default function ManageDataScreen() {
           },
         },
       ])
+    },
+    [load]
+  )
+
+  const handleReopenSession = useCallback(
+    async (session: SessionRow) => {
+      Alert.alert(
+        'Re-Open Game?',
+        'This finished game will move back to active play for everyone. Existing scores stay in place, but every player will need to re-save before the host can finish it again.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Re-Open Game',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                setWorking(true)
+                await reopenFinishedGameRpc(session.id)
+                await Promise.all([
+                  setActiveSessionId(session.id),
+                  setActiveJoinCode(session.join_code ?? ''),
+                ])
+                await load()
+                router.replace({
+                  pathname: '/compare',
+                  params: session.join_code
+                    ? { sessionId: session.id, joinCode: session.join_code }
+                    : { sessionId: session.id },
+                } as never)
+              } catch (err: any) {
+                Alert.alert('Re-open failed', err?.message ?? 'Unable to re-open game.')
+              } finally {
+                setWorking(false)
+              }
+            },
+          },
+        ]
+      )
+    },
+    [load]
+  )
+
+  const handleDeleteSoloHistory = useCallback(
+    async (soloGame: ManageDataSoloHistoryItem) => {
+      Alert.alert(
+        'Delete Solo Game?',
+        'This permanently removes the saved solo result from your solo history and solo statistics.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete Solo Game',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                setWorking(true)
+                await deleteSoloGameResult(soloGame.id)
+
+                try {
+                  const storedDraft = await AsyncStorage.getItem(SOLO_DRAFT_STORAGE_KEY)
+                  if (storedDraft) {
+                    const parsedDraft = normalizeSoloDraft(JSON.parse(storedDraft))
+                    if (parsedDraft.savedGameId === soloGame.id) {
+                      await AsyncStorage.removeItem(SOLO_DRAFT_STORAGE_KEY)
+                    }
+                  }
+                } catch {}
+
+                await load()
+                Alert.alert('Deleted', 'The solo game was removed.')
+              } catch (err: any) {
+                Alert.alert('Delete failed', err?.message ?? 'Unable to delete solo game.')
+              } finally {
+                setWorking(false)
+              }
+            },
+          },
+        ]
+      )
     },
     [load]
   )
@@ -330,9 +491,38 @@ export default function ManageDataScreen() {
       },
     ])
   }, [])
-  const sessionMenuActions: ActionDialogModalAction[] = useMemo(() => {
-    if (!selectedSession) {
+  const historyMenuActions: ActionDialogModalAction[] = useMemo(() => {
+    if (!selectedHistoryItem) {
       return [{ id: 'cancel', text: 'Cancel', style: 'cancel' }]
+    }
+
+    if (selectedHistoryItem.kind === 'solo') {
+      return [
+        {
+          id: 'editSoloGame',
+          text: 'Edit Solo Game',
+          onPress: () => {
+            setSelectedHistoryItem(null)
+            handleEditSoloGame(selectedHistoryItem)
+          },
+        },
+        {
+          id: 'deleteSoloGame',
+          text: 'Delete Solo Game',
+          style: 'destructive',
+          disabled: working,
+          onPress: () => {
+            setSelectedHistoryItem(null)
+            void handleDeleteSoloHistory(selectedHistoryItem)
+          },
+        },
+        {
+          id: 'cancel',
+          text: 'Cancel',
+          style: 'cancel',
+          onPress: () => setSelectedHistoryItem(null),
+        },
+      ]
     }
 
     const actions: ActionDialogModalAction[] = [
@@ -340,16 +530,14 @@ export default function ManageDataScreen() {
         id: 'viewRecap',
         text: 'View Recap',
         onPress: () => {
-          setSelectedSession(null)
-          handleOpenRecap(selectedSession)
-        },
-      },
-      {
-        id: 'copyJoinCode',
-        text: 'Copy Join Code',
-        onPress: () => {
-          setSelectedSession(null)
-          void handleCopyJoinCode(selectedSession.join_code)
+          setSelectedHistoryItem(null)
+          handleOpenRecap({
+            id: selectedHistoryItem.id,
+            join_code: selectedHistoryItem.joinCode,
+            created_at: selectedHistoryItem.createdAt,
+            updated_at: selectedHistoryItem.updatedAt,
+            is_host: selectedHistoryItem.isHost,
+          })
         },
       },
       {
@@ -358,21 +546,49 @@ export default function ManageDataScreen() {
         style: 'destructive',
         disabled: working,
         onPress: () => {
-          setSelectedSession(null)
-          void handleDeleteMyInvolvement(selectedSession)
+          setSelectedHistoryItem(null)
+          void handleDeleteMyInvolvement({
+            id: selectedHistoryItem.id,
+            join_code: selectedHistoryItem.joinCode,
+            created_at: selectedHistoryItem.createdAt,
+            updated_at: selectedHistoryItem.updatedAt,
+            is_host: selectedHistoryItem.isHost,
+          })
         },
       },
     ]
 
-    if (selectedSession.is_host) {
+    if (selectedHistoryItem.isHost) {
+      actions.push({
+        id: 'reopenGame',
+        text: 'Re-Open Game',
+        disabled: working,
+        onPress: () => {
+          setSelectedHistoryItem(null)
+          void handleReopenSession({
+            id: selectedHistoryItem.id,
+            join_code: selectedHistoryItem.joinCode,
+            created_at: selectedHistoryItem.createdAt,
+            updated_at: selectedHistoryItem.updatedAt,
+            is_host: selectedHistoryItem.isHost,
+          })
+        },
+      })
+
       actions.push({
         id: 'deleteGame',
         text: 'Delete Game',
         style: 'destructive',
         disabled: working,
         onPress: () => {
-          setSelectedSession(null)
-          void handleDeleteOwnedSession(selectedSession)
+          setSelectedHistoryItem(null)
+          void handleDeleteOwnedSession({
+            id: selectedHistoryItem.id,
+            join_code: selectedHistoryItem.joinCode,
+            created_at: selectedHistoryItem.createdAt,
+            updated_at: selectedHistoryItem.updatedAt,
+            is_host: selectedHistoryItem.isHost,
+          })
         },
       })
     }
@@ -381,16 +597,18 @@ export default function ManageDataScreen() {
       id: 'cancel',
       text: 'Cancel',
       style: 'cancel',
-      onPress: () => setSelectedSession(null),
+      onPress: () => setSelectedHistoryItem(null),
     })
 
     return actions
   }, [
-    handleCopyJoinCode,
+    handleDeleteSoloHistory,
     handleDeleteMyInvolvement,
     handleDeleteOwnedSession,
+    handleEditSoloGame,
     handleOpenRecap,
-    selectedSession,
+    handleReopenSession,
+    selectedHistoryItem,
     working,
   ])
 
@@ -515,25 +733,28 @@ export default function ManageDataScreen() {
                     />
                   </View>
 
-                    <View style={styles.sectionHeaderCopy}>
+                  <View style={styles.sectionHeaderCopy}>
                     <Text style={styles.sectionTitle}>Completed Games</Text>
                     <Text style={styles.sectionSubtitle}>
-                      Finished games you played in. Tap to open the recap or hold for actions.
+                      Finished games and solo runs tied to your account. Tap to open or hold for actions.
                     </Text>
                   </View>
                 </View>
 
-                {completedSessions.length === 0 ? (
+                {historyItems.length === 0 ? (
                   <View style={styles.emptyPanel}>
                     <Text style={styles.emptyTitle}>No finished games yet</Text>
                     <Text style={styles.emptyText}>
-                      Completed games you participated in will move here after the host finishes
-                      them.
+                      Completed multiplayer games and saved solo runs will appear here.
                     </Text>
                   </View>
                 ) : (
-                  completedSessions.map((session) => (
-                    <View key={session.id} style={styles.entryPanel}>
+                  historyItems.map((item) => {
+                    const copy = buildHistoryCardCopy(item)
+                    const pressKey = `${item.kind}:${item.id}`
+
+                    return (
+                    <View key={pressKey} style={styles.entryPanel}>
                       <Pressable
                         style={({ pressed }) => [
                           styles.entryMetaCard,
@@ -541,30 +762,22 @@ export default function ManageDataScreen() {
                           pressed && styles.buttonPressed,
                         ]}
                         onPress={() => {
-                          if (longPressSessionIdRef.current === session.id) {
-                            longPressSessionIdRef.current = null
+                          if (longPressHistoryIdRef.current === pressKey) {
+                            longPressHistoryIdRef.current = null
                             return
                           }
 
-                          handleOpenRecap(session)
+                          handleOpenHistoryItem(item)
                         }}
                         onLongPress={() => {
-                          longPressSessionIdRef.current = session.id
-                          setSelectedSession(session)
+                          longPressHistoryIdRef.current = pressKey
+                          setSelectedHistoryItem(item)
                         }}
                         delayLongPress={350}
                       >
-                        <Text style={styles.entryLabel}>
-                          {session.is_host ? 'Hosted Game' : 'Joined Game'}
-                        </Text>
-                        <Text style={styles.entryTitle}>
-                          {session.join_code ? `Join Code ${session.join_code}` : 'Completed Game'}
-                        </Text>
-                        <Text style={styles.entrySub}>
-                          {session.updated_at
-                            ? `Finished ${new Date(session.updated_at).toLocaleString()}`
-                            : session.id}
-                        </Text>
+                        <Text style={styles.entryLabel}>{copy.label}</Text>
+                        <Text style={styles.entryTitle}>{copy.title}</Text>
+                        <Text style={styles.entrySub}>{copy.subtitle}</Text>
                       </Pressable>
 
                       <View style={styles.utilityHint}>
@@ -572,7 +785,8 @@ export default function ManageDataScreen() {
                         <Text style={styles.utilityHintSub}>Menu</Text>
                       </View>
                     </View>
-                  ))
+                    )
+                  })
                 )}
               </View>
 
@@ -645,12 +859,22 @@ export default function ManageDataScreen() {
       </ImageBackground>
 
       <ActionDialogModal
-        visible={Boolean(selectedSession)}
-        kicker="Completed Game"
-        title={selectedSession?.join_code ? `Game ${selectedSession.join_code}` : 'Game Actions'}
-        message="Choose an action for this finished session."
-        actions={sessionMenuActions}
-        onRequestClose={() => setSelectedSession(null)}
+        visible={Boolean(selectedHistoryItem)}
+        kicker={selectedHistoryItem?.kind === 'solo' ? 'Solo Game' : 'Completed Game'}
+        title={
+          selectedHistoryItem?.kind === 'session'
+            ? selectedHistoryItem.joinCode
+              ? `Game ${selectedHistoryItem.joinCode}`
+              : 'Game Actions'
+            : 'Solo Game Actions'
+        }
+        message={
+          selectedHistoryItem?.kind === 'solo'
+            ? 'Edit this solo result or remove it from your solo history.'
+            : 'Choose an action for this finished session.'
+        }
+        actions={historyMenuActions}
+        onRequestClose={() => setSelectedHistoryItem(null)}
       />
     </View>
   )
@@ -682,32 +906,31 @@ const styles = StyleSheet.create({
   content: {
     flexGrow: 1,
     paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 28,
+    paddingTop: 8,
+    paddingBottom: 20,
   },
 
   heroSection: {
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 4,
   },
 
   logoCrop: {
-    width: 320,
+    width: 340,
     maxWidth: '100%',
-    height: 84,
+    height: 88,
     alignItems: 'center',
     justifyContent: 'flex-start',
     overflow: 'hidden',
   },
 
   logo: {
-    width: 320,
-    height: 133,
-    transform: [{ translateY: -16 }],
+    width: 328,
+    height: 136,
   },
 
   brandWord: {
-    marginTop: -2,
+    marginTop: -16,
     marginBottom: 8,
     color: '#F5EBFF',
     fontSize: 30,
@@ -734,7 +957,7 @@ const styles = StyleSheet.create({
   },
 
   cardsStack: {
-    marginTop: 34,
+    marginTop: 18,
   },
 
   summaryCard: {

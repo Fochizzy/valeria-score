@@ -8,7 +8,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native'
-import { router } from 'expo-router'
+import { router, useLocalSearchParams } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import AnalyticsSegmentedControl from '../components/AnalyticsSegmentedControl'
@@ -65,7 +65,7 @@ import {
   type PlayerLeaderboardRow,
   type PlayerStatsTimeWindow,
 } from '../lib/player-stats-data'
-import { getBottomNavTopClearance } from '../lib/bottom-nav-layout'
+import { getBottomNavClearance } from '../lib/bottom-nav-layout'
 import { loadPlayerCategoryStats } from '../lib/player-category-fetch'
 import type { PlayerCategoryStats } from '../lib/score-category-breakdown'
 import {
@@ -79,6 +79,7 @@ type TimeWindow = PlayerStatsTimeWindow
 
 export default function PlayerStatsScreen() {
   const insets = useSafeAreaInsets()
+  const params = useLocalSearchParams<{ playerKey?: string }>()
   const { width } = useWindowDimensions()
   const [query, setQuery] = useState('')
   const [dukeQuery, setDukeQuery] = useState('')
@@ -106,6 +107,10 @@ export default function PlayerStatsScreen() {
   const [loggingOut, setLoggingOut] = useState(false)
   const [viewerUserId, setViewerUserId] = useState<string | null | undefined>(undefined)
   const didLoadOnceRef = useRef(false)
+  const requestedPlayerKey =
+    typeof params.playerKey === 'string' && params.playerKey.trim()
+      ? params.playerKey.trim()
+      : null
 
   const dukeOptions = useMemo(
     () =>
@@ -293,6 +298,17 @@ export default function PlayerStatsScreen() {
       return
     }
 
+    if (requestedPlayerKey) {
+      const requestedPlayer = players.find(
+        (player) => player.player_key === requestedPlayerKey
+      )
+      if (requestedPlayer && selectedPlayerKey !== requestedPlayer.player_key) {
+        didDefaultSelectRef.current = true
+        setSelectedPlayerKey(requestedPlayer.player_key)
+        return
+      }
+    }
+
     if (!selectedPlayerKey || !players.some((player) => player.player_key === selectedPlayerKey)) {
       const viewerKey = viewerUserId ? `user:${viewerUserId}` : null
       const viewerRow = viewerKey
@@ -306,7 +322,7 @@ export default function PlayerStatsScreen() {
         setSelectedPlayerKey(players[0].player_key)
       }
     }
-  }, [players, selectedPlayerKey, viewerUserId])
+  }, [players, requestedPlayerKey, selectedPlayerKey, viewerUserId])
 
   useEffect(() => {
     void loadSelectedPlayerStats(selectedPlayerKey)
@@ -483,6 +499,7 @@ export default function PlayerStatsScreen() {
         onDukeStatistics: () => router.push('/duke-stats'),
         onPlayerStatistics: () => router.push('/player-stats'),
         onGlobalTrends: () => router.push('/global-trends'),
+        onSoloStatistics: () => router.push('/solo-stats' as never),
         onLogout: () => {
           void handleLogout()
         },
@@ -527,7 +544,7 @@ export default function PlayerStatsScreen() {
         return
       }
 
-      router.push(nextSegment.href)
+      router.push(nextSegment.href as never)
     },
     [analyticsRouteSegments]
   )
@@ -541,7 +558,7 @@ export default function PlayerStatsScreen() {
         <ScrollView
           ref={screenScrollRef}
           style={styles.container}
-          contentContainerStyle={[styles.content, { paddingTop: getBottomNavTopClearance(insets.top) }]}
+          contentContainerStyle={[styles.content, { paddingBottom: getBottomNavClearance(insets.bottom) }]}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}

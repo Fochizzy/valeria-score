@@ -9,6 +9,7 @@ export type CompareProgressEntry = {
   locked: boolean
   userId?: string | null
   hasScore?: boolean
+  confirmedForCurrentRevision?: boolean
 }
 
 type BuildCompareProgressInput = {
@@ -18,7 +19,7 @@ type BuildCompareProgressInput = {
 }
 
 function isEntryReady(entry: CompareProgressEntry) {
-  return entry.locked || Boolean(entry.hasScore) || Boolean(entry.dukeSlug)
+  return entry.locked || (Boolean(entry.hasScore) && entry.confirmedForCurrentRevision !== false)
 }
 
 function getTrackedEntries(

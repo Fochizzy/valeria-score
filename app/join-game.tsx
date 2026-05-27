@@ -78,14 +78,14 @@ export default function JoinGameScreen() {
             compact
             showBack
             title="Join Game"
-            subtitle="Enter a 6-character code"
+            subtitle="Paste a 6-character code"
           />
 
           <View style={styles.heroCard}>
             <Text style={styles.kicker}>Session Entry</Text>
             <Text style={styles.heroTitle}>Reconnect To A Table</Text>
             <Text style={styles.heroSubtitle}>
-              Enter a 6-character join code to jump back into a live Valeria session.
+              Paste the 6-character code from your message to jump back into a live Valeria session.
             </Text>
           </View>
 
@@ -99,6 +99,9 @@ export default function JoinGameScreen() {
               placeholderTextColor="#8E7FA8"
               autoCapitalize="characters"
               autoCorrect={false}
+              textContentType="oneTimeCode"
+              autoComplete="sms-otp"
+              importantForAutofill="yes"
               maxLength={6}
               style={styles.input}
               returnKeyType="done"
@@ -123,7 +126,7 @@ export default function JoinGameScreen() {
                 disabled={loading || normalizedCode.length !== 6}
               >
                 <Text style={styles.primaryButtonText}>
-                  {loading ? 'Joining...' : 'Join'}
+                  {loading ? 'Joining...' : 'Join Game'}
                 </Text>
               </Pressable>
             </View>

@@ -22,10 +22,10 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import PasswordVisibilityToggle from '../components/PasswordVisibilityToggle'
 import { theme } from '../constants/theme'
 import {
-  CLAIM_GUEST_DISPLAY_NAME_KEY,
   CLAIM_GUEST_PUBLIC_PLAYER_ID_KEY,
   executePendingGuestClaim,
 } from '../lib/claim-guest-flow'
+import { buildResetPasswordRedirectUrl } from '../lib/email-confirmation-redirect'
 import {
   ForgotPasswordValidationError,
   requestPasswordReset,
@@ -38,7 +38,7 @@ import {
 } from '../lib/remembered-credentials'
 import { supabase } from '../lib/supabase'
 
-const logo = require('../assets/valeria_logo.png')
+const logo = require('../assets/valeria_wordmark.png')
 const backdrop = require('../assets/Citizen Backdrop.png')
 const DISPLAY_FONT = Platform.select({
   ios: 'Georgia',
@@ -166,7 +166,6 @@ export default function LoginScreen() {
       const claimOutcome = await executePendingGuestClaim(authUser?.user_metadata, {
         callClaimRpc: async (input) => {
           const { data, error: rpcError } = await supabase.rpc('claim_guest_profile', {
-            p_display_name: input.displayName,
             p_public_player_id: input.publicPlayerId,
           })
           return { data, error: rpcError }
@@ -174,7 +173,6 @@ export default function LoginScreen() {
         clearPendingMetadata: async () => {
           await supabase.auth.updateUser({
             data: {
-              [CLAIM_GUEST_DISPLAY_NAME_KEY]: null,
               [CLAIM_GUEST_PUBLIC_PLAYER_ID_KEY]: null,
             },
           })
@@ -214,9 +212,7 @@ export default function LoginScreen() {
       const result = await requestPasswordReset(
         {
           email,
-          redirectTo: Linking.createURL('reset-password', {
-            scheme: 'valeriascore',
-          }),
+          redirectTo: buildResetPasswordRedirectUrl(Linking.createURL),
         },
         {
           resetPasswordForEmail: (nextEmail, options) =>
@@ -415,18 +411,16 @@ const styles = StyleSheet.create({
   logoCrop: {
     width: 320,
     maxWidth: '100%',
-    height: 84,
+    height: 112,
     alignItems: 'center',
-    justifyContent: 'flex-start',
-    overflow: 'hidden',
+    justifyContent: 'center',
   },
   logo: {
     width: 320,
-    height: 133,
-    transform: [{ translateY: -16 }],
+    height: 112,
   },
   brandWord: {
-    marginTop: -2,
+    marginTop: -24,
     marginBottom: 8,
     color: '#F5EBFF',
     fontSize: 30,

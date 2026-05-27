@@ -43,35 +43,37 @@ export default function DukePicker({
                 pressed && styles.cardPressed,
               ]}
             >
-              <View style={styles.imageWrap}>
+              <View
+                style={[
+                  styles.imageWrap,
+                  isSelected && styles.imageWrapSelected,
+                ]}
+              >
                 {imageSource ? (
                   <Image
                     source={imageSource}
                     style={styles.image}
-                    resizeMode="cover"
+                    resizeMode="contain"
                   />
                 ) : (
                   <View style={styles.imageFallback}>
                     <Text style={styles.imageFallbackTitle}>No Image</Text>
-                    <Text style={styles.imageFallbackText} numberOfLines={2}>
-                      {duke.name}
-                    </Text>
                   </View>
                 )}
+              </View>
 
-                <View style={styles.scrim} />
-
-                <View style={styles.textWrap}>
-                  <Text style={styles.name} numberOfLines={2}>
-                    {duke.name}
-                  </Text>
-                </View>
-
-                {isSelected ? (
-                  <View style={styles.selectedBadge}>
-                    <Text style={styles.selectedBadgeText}>Selected</Text>
-                  </View>
-                ) : null}
+              <View
+                style={[
+                  styles.nameStrip,
+                  isSelected && styles.nameStripSelected,
+                ]}
+              >
+                <Text
+                  style={[styles.name, isSelected && styles.nameSelected]}
+                  numberOfLines={2}
+                >
+                  {duke.name}
+                </Text>
               </View>
             </Pressable>
           )
@@ -83,27 +85,26 @@ export default function DukePicker({
 
 const styles = StyleSheet.create({
   wrapper: {
-    marginTop: theme.spacing.sm,
+    marginTop: 2,
   },
 
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'space-between',
     gap: 12,
+    justifyContent: 'space-between',
   },
 
   card: {
-    width: '48%',
-    borderRadius: 20,
-    overflow: 'hidden',
-    marginBottom: 2,
+    width: '47%',
+    borderRadius: 14,
+    overflow: 'visible',
     backgroundColor: 'transparent',
   },
 
   cardSelected: {
-    transform: [{ scale: 1.02 }],
-    ...theme.shadow.glow,
+    transform: [{ scale: 1.06 }],
+    zIndex: 10,
   },
 
   cardMuted: {
@@ -111,18 +112,33 @@ const styles = StyleSheet.create({
   },
 
   cardPressed: {
-    opacity: 0.96,
-    transform: [{ scale: 0.99 }],
+    opacity: 0.92,
+    transform: [{ scale: 0.97 }],
   },
 
   imageWrap: {
     width: '100%',
-    aspectRatio: 1,
-    borderRadius: 20,
+    aspectRatio: 0.72,
+    borderTopLeftRadius: 14,
+    borderTopRightRadius: 14,
     overflow: 'hidden',
     backgroundColor: theme.colors.surfaceAlt,
     borderWidth: 1,
+    borderBottomWidth: 0,
     borderColor: theme.colors.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  imageWrapSelected: {
+    borderColor: theme.colors.primary,
+    borderWidth: 2,
+    borderBottomWidth: 0,
+    shadowColor: '#8B5CF6',
+    shadowOpacity: 0.55,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 8,
   },
 
   image: {
@@ -134,68 +150,51 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 8,
     backgroundColor: theme.colors.backgroundAlt ?? theme.colors.background,
   },
 
   imageFallbackTitle: {
     color: theme.colors.text,
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '900',
-    marginBottom: 6,
     textAlign: 'center',
   },
 
-  imageFallbackText: {
-    color: theme.colors.textMuted,
-    fontSize: 11,
-    lineHeight: 16,
-    textAlign: 'center',
+  nameStrip: {
+    backgroundColor: 'rgba(25, 18, 43, 0.95)',
+    borderBottomLeftRadius: 14,
+    borderBottomRightRadius: 14,
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: theme.colors.border,
+    paddingHorizontal: 6,
+    paddingVertical: 8,
+    minHeight: 42,
+    justifyContent: 'center',
   },
 
-  scrim: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: '46%',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
-
-  textWrap: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+  nameStripSelected: {
+    backgroundColor: 'rgba(123, 92, 255, 0.18)',
+    borderColor: theme.colors.primary,
+    borderWidth: 2,
+    borderTopWidth: 0,
+    shadowColor: '#8B5CF6',
+    shadowOpacity: 0.55,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 8,
   },
 
   name: {
-    color: '#FFF',
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '900',
+    color: theme.colors.text,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '800',
     textAlign: 'center',
-    minHeight: 36,
   },
 
-  selectedBadge: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: 'rgba(139,92,246,0.92)',
-    borderWidth: 1,
-    borderColor: '#E6DAFF',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: theme.radius.pill,
-  },
-
-  selectedBadgeText: {
-    color: '#FFF',
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 0.4,
+  nameSelected: {
+    color: theme.colors.accent,
   },
 })

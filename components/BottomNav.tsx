@@ -1,14 +1,17 @@
 import React, { useCallback, useMemo, useState } from 'react'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
   Image,
   Pressable,
   StyleSheet,
+  Text,
   View,
   type ImageSourcePropType,
 } from 'react-native'
 import { useGlobalSearchParams, usePathname, useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { theme } from '../constants/theme'
+import { getBottomNavBottomOffset } from '../lib/bottom-nav-layout'
 import { buildBottomNavRoute } from '../lib/bottom-nav-route'
 import {
   buildBoundManageAccountMenuActions,
@@ -18,6 +21,7 @@ import { logoutAndClearActiveSessionState } from '../lib/logout'
 import { clearActiveSessionState } from '../lib/sessions'
 import { supabase } from '../lib/supabase'
 import { Alert } from '../lib/themed-alert'
+import { buildScoreDraftStorageKey } from '../lib/score-screen-state'
 import ManageAccountModal from './ManageAccountModal'
 
 const scoreIcon = require('../assets/nav/nav-score.png')
@@ -55,10 +59,51 @@ export default function BottomNav() {
     guestProfileId?: string
   }>()
 
-  void insets
-
   const [accountMenuVisible, setAccountMenuVisible] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
+
+  const isScoreRoute = pathname.startsWith('/score')
+  const routeSessionId =
+    typeof params.sessionId === 'string' ? params.sessionId : ''
+  const guestMode = params.guestMode === '1'
+  const guestName = typeof params.guestName === 'string' ? params.guestName : ''
+  const guestEntryId =
+    typeof params.guestEntryId === 'string' ? params.guestEntryId : ''
+  const guestProfileId =
+    typeof params.guestProfileId === 'string' ? params.guestProfileId : ''
+
+  const wrapStyle = useMemo(
+    () => [styles.wrap, { bottom: getBottomNavBottomOffset(insets.bottom) }],
+    [insets.bottom]
+  )
+
+  const barStyle = useMemo(
+    () => [styles.bar, { paddingBottom: 0 }],
+    []
+  )
+
+  const brandingPad = Math.max(6, insets.bottom / 2)
+  const brandingStyle = useMemo(
+    () => [
+      styles.brandingText,
+      {
+        paddingTop: brandingPad,
+        paddingBottom: brandingPad,
+      },
+    ],
+    [brandingPad]
+  )
+
+  const scoreDraftStorageKey = useMemo(
+    () =>
+      buildScoreDraftStorageKey({
+        sessionId: routeSessionId,
+        guestMode,
+        guestProfileId: guestProfileId || null,
+        guestEntryId: guestEntryId || null,
+      }),
+    [guestEntryId, guestMode, guestProfileId, routeSessionId]
+  )
 
   const activeKey: NavKey | null = useMemo(() => {
     if (pathname.startsWith('/compare')) return 'compare'
@@ -67,9 +112,49 @@ export default function BottomNav() {
     return null
   }, [pathname])
 
+  const confirmScoreExitIfNeeded = useCallback(
+    async (action: () => void) => {
+      if (!isScoreRoute) {
+        action()
+        return
+      }
+
+      try {
+        const draftValue = scoreDraftStorageKey
+          ? await AsyncStorage.getItem(scoreDraftStorageKey)
+          : null
+
+        if (!draftValue) {
+          action()
+          return
+        }
+      } catch (error) {
+        console.error('Failed to read score draft before navigating.', error)
+        action()
+        return
+      }
+
+      Alert.alert(
+        'Leave score entry?',
+        'You have unsaved score changes on this screen. Leave anyway?',
+        [
+          { text: 'Stay', style: 'cancel' },
+          {
+            text: 'Leave',
+            style: 'destructive',
+            onPress: action,
+          },
+        ]
+      )
+    },
+    [isScoreRoute, scoreDraftStorageKey]
+  )
+
   const handleHomePress = useCallback(() => {
-    router.replace('/create-session')
-  }, [router])
+    void confirmScoreExitIfNeeded(() => {
+      router.replace('/create-session')
+    })
+  }, [confirmScoreExitIfNeeded, router])
 
   const handleNavPress = useCallback(
     (item: NavItem) => {
@@ -78,23 +163,35 @@ export default function BottomNav() {
         return
       }
 
-      if (!item.path) return
+      if (!item.path || pathname.startsWith(item.path)) return
+
+      const nextPath = item.path
 
       const navParams = {
         selectedSlug: typeof params.selectedSlug === 'string' ? params.selectedSlug : '',
-        sessionId: typeof params.sessionId === 'string' ? params.sessionId : '',
+        sessionId: routeSessionId,
         joinCode: typeof params.joinCode === 'string' ? params.joinCode : '',
-        guestMode: typeof params.guestMode === 'string' ? params.guestMode : '',
-        guestName: typeof params.guestName === 'string' ? params.guestName : '',
-        guestEntryId:
-          typeof params.guestEntryId === 'string' ? params.guestEntryId : '',
-        guestProfileId:
-          typeof params.guestProfileId === 'string' ? params.guestProfileId : '',
+        guestMode: guestMode ? '1' : '',
+        guestName,
+        guestEntryId,
+        guestProfileId,
       }
 
-      router.push(buildBottomNavRoute(item.path, navParams))
+      void confirmScoreExitIfNeeded(() => {
+        router.push(buildBottomNavRoute(nextPath, navParams))
+      })
     },
-    [params, router]
+    [
+      confirmScoreExitIfNeeded,
+      guestEntryId,
+      guestMode,
+      guestName,
+      guestProfileId,
+      params,
+      pathname,
+      routeSessionId,
+      router,
+    ]
   )
 
   const handleLogout = useCallback(async () => {
@@ -115,32 +212,59 @@ export default function BottomNav() {
   const accountMenuActions = useMemo(
     () =>
       buildBoundManageAccountMenuActions({
-        onManageData: () => router.push('/manage-data'),
-        onNewSession: () => router.replace('/create-session'),
-        onDukeStatistics: () => router.push('/duke-stats'),
-        onPlayerStatistics: () => router.push('/player-stats'),
-        onGlobalTrends: () => router.push('/global-trends'),
+        onManageData: () => {
+          void confirmScoreExitIfNeeded(() => {
+            router.push('/manage-data')
+          })
+        },
+        onNewSession: () => {
+          void confirmScoreExitIfNeeded(() => {
+            router.replace('/create-session')
+          })
+        },
+        onDukeStatistics: () => {
+          void confirmScoreExitIfNeeded(() => {
+            router.push('/duke-stats')
+          })
+        },
+        onPlayerStatistics: () => {
+          void confirmScoreExitIfNeeded(() => {
+            router.push('/player-stats')
+          })
+        },
+        onGlobalTrends: () => {
+          void confirmScoreExitIfNeeded(() => {
+            router.push('/global-trends')
+          })
+        },
+        onSoloStatistics: () => {
+          void confirmScoreExitIfNeeded(() => {
+            router.push('/solo-stats' as never)
+          })
+        },
         onLogout: () => {
-          void handleLogout()
+          void confirmScoreExitIfNeeded(() => {
+            void handleLogout()
+          })
         },
       }),
-    [router, handleLogout]
+    [confirmScoreExitIfNeeded, router, handleLogout]
   )
 
   return (
     <>
-      <View style={styles.wrap}>
-        <View style={styles.bar}>
-          <Pressable
-            onPress={handleHomePress}
-            style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
-            hitSlop={8}
-            accessibilityLabel="Home"
-          >
-            <Image source={homeIcon} style={styles.homeIcon} resizeMode="contain" />
-          </Pressable>
-
+      <View style={wrapStyle}>
+        <View style={barStyle}>
           <View style={styles.tabsRow}>
+            <Pressable
+              onPress={handleHomePress}
+              style={({ pressed }) => [styles.tab, pressed && styles.pressed]}
+              hitSlop={8}
+              accessibilityLabel="Home"
+            >
+              <Image source={homeIcon} style={styles.icon} resizeMode="contain" />
+            </Pressable>
+
             {ITEMS.map((item) => {
               const active = item.key !== 'manage' && item.key === activeKey
 
@@ -166,6 +290,8 @@ export default function BottomNav() {
               )
             })}
           </View>
+
+          <Text style={brandingStyle}>VALERIA CARD KINGDOMS</Text>
         </View>
       </View>
 
@@ -180,46 +306,32 @@ export default function BottomNav() {
   )
 }
 
-const ICON_SIZE = 54
-const CHIP_HEIGHT = 70
+const ICON_SIZE = 62
+const CHIP_HEIGHT = 78
 
 const styles = StyleSheet.create({
   wrap: {
     position: 'absolute',
-    top: 0,
-    left: 6,
-    right: 6,
+    bottom: 0,
+    left: 0,
+    right: 0,
     zIndex: 20,
     elevation: 20,
   },
 
   bar: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'column',
     backgroundColor: '#1A1330',
-    borderRadius: 20,
-    borderWidth: 1,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
     borderColor: theme.colors.border,
     paddingHorizontal: 7,
-    paddingVertical: 7,
-    gap: 7,
+    paddingTop: 12,
+    paddingBottom: 7,
     ...theme.shadow.card,
-  },
-
-  backButton: {
-    width: 62,
-    minHeight: CHIP_HEIGHT,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#251A40',
-    paddingVertical: 6,
-  },
-
-  homeIcon: {
-    width: ICON_SIZE,
-    height: ICON_SIZE,
-    opacity: 0.86,
   },
 
   tabsRow: {
@@ -264,5 +376,13 @@ const styles = StyleSheet.create({
   iconActive: {
     opacity: 1,
     transform: [{ scale: 1.05 }],
+  },
+
+  brandingText: {
+    color: 'rgba(194, 170, 255, 0.22)',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 3,
+    textAlign: 'center',
   },
 })

@@ -7,16 +7,15 @@
 //     If user_metadata carries a pending claim, this dispatches the RPC, then
 //     clears the metadata so we don't re-fire on every subsequent login.
 
-export const CLAIM_GUEST_DISPLAY_NAME_KEY = 'claim_guest_display_name'
+import { normalizePlayerId } from './player-id.ts'
+
 export const CLAIM_GUEST_PUBLIC_PLAYER_ID_KEY = 'claim_guest_public_player_id'
 
 export type PendingGuestClaim = {
-  displayName: string
   publicPlayerId: string
 }
 
 export type RawSignUpClaimMetadata = {
-  [CLAIM_GUEST_DISPLAY_NAME_KEY]?: string
   [CLAIM_GUEST_PUBLIC_PLAYER_ID_KEY]?: string
 }
 
@@ -26,18 +25,17 @@ export type RawSignUpClaimMetadata = {
  * out the claim section at all.
  */
 export function normalizeClaimGuestInput(
-  input: { displayName: string; publicPlayerId: string } | null | undefined
+  input: { publicPlayerId: string } | null | undefined
 ): PendingGuestClaim | null {
   if (!input) return null
-  const displayName = (input.displayName ?? '').trim()
-  const publicPlayerId = (input.publicPlayerId ?? '').trim()
-  if (!displayName && !publicPlayerId) return null
-  if (!displayName || !publicPlayerId) {
-    throw new Error(
-      'To claim a guest account, enter both the guest display name and the player ID.'
-    )
+  const rawPlayerId = String(input.publicPlayerId ?? '')
+  const hasAnyInput = rawPlayerId.trim().length > 0
+  const publicPlayerId = normalizePlayerId(rawPlayerId)
+  if (!hasAnyInput) return null
+  if (!publicPlayerId) {
+    throw new Error('To claim a guest account, enter the guest Player ID.')
   }
-  return { displayName, publicPlayerId }
+  return { publicPlayerId }
 }
 
 /**
@@ -50,7 +48,6 @@ export function buildSignUpClaimMetadata(
 ): RawSignUpClaimMetadata {
   if (!pending) return {}
   return {
-    [CLAIM_GUEST_DISPLAY_NAME_KEY]: pending.displayName,
     [CLAIM_GUEST_PUBLIC_PLAYER_ID_KEY]: pending.publicPlayerId,
   }
 }
@@ -63,12 +60,11 @@ export function readPendingGuestClaim(
   metadata: Record<string, unknown> | null | undefined
 ): PendingGuestClaim | null {
   if (!metadata) return null
-  const rawDisplayName = metadata[CLAIM_GUEST_DISPLAY_NAME_KEY]
   const rawPlayerId = metadata[CLAIM_GUEST_PUBLIC_PLAYER_ID_KEY]
-  const displayName = typeof rawDisplayName === 'string' ? rawDisplayName.trim() : ''
-  const publicPlayerId = typeof rawPlayerId === 'string' ? rawPlayerId.trim() : ''
-  if (!displayName || !publicPlayerId) return null
-  return { displayName, publicPlayerId }
+  const publicPlayerId =
+    typeof rawPlayerId === 'string' ? normalizePlayerId(rawPlayerId) : ''
+  if (!publicPlayerId) return null
+  return { publicPlayerId }
 }
 
 export type ClaimGuestRpcResult = {

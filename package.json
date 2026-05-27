@@ -11,7 +11,11 @@
     "check:build-env": "node scripts/verify-build-env.js",
     "build:android:apk": "npm run check:build-env && eas build -p android --profile preview",
     "build:android:production": "npm run check:build-env && eas build -p android --profile production",
-    "build:android:dev": "npm run check:build-env && eas build -p android --profile development"
+    "build:android:dev": "npm run check:build-env && eas build -p android --profile development",
+    "test": "node --test --test-reporter=spec lib/**/*.test.js supabase/**/*.test.js",
+    "test:icons": "node --test --test-reporter=spec lib/icons.test.js",
+    "start:clear": "expo start --clear",
+    "android:clear": "expo start --clear"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
@@ -24,7 +28,7 @@
     "expo": "~54.0.33",
     "expo-clipboard": "~8.0.8",
     "expo-constants": "~18.0.13",
-    "expo-dev-client": "~6.0.20",
+    "expo-dev-client": "~6.0.21",
     "expo-font": "~14.0.11",
     "expo-haptics": "~15.0.8",
     "expo-image": "~3.0.11",

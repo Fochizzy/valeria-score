@@ -57,6 +57,9 @@ test('deleteAccountAndData removes owned sessions, guest data, user data, profil
     deleteGuestProfilesByOwnerUserId: async (userId) => {
       calls.push(['deleteGuestProfilesByOwnerUserId', userId])
     },
+    deleteSoloGameResultsByOwnerUserId: async (userId) => {
+      calls.push(['deleteSoloGameResultsByOwnerUserId', userId])
+    },
     deleteProfileById: async (userId) => {
       calls.push(['deleteProfileById', userId])
     },
@@ -82,6 +85,7 @@ test('deleteAccountAndData removes owned sessions, guest data, user data, profil
     ['deleteSessionPlayersByUserId', 'user-1'],
     ['unlinkGuestProfilesByLinkedUserId', 'user-1'],
     ['deleteGuestProfilesByOwnerUserId', 'user-1'],
+    ['deleteSoloGameResultsByOwnerUserId', 'user-1'],
     ['deleteProfileById', 'user-1'],
     ['deleteAuthUserById', 'user-1'],
   ])
@@ -135,6 +139,9 @@ test('deleteAccountAndData skips owned-session and owned-guest cleanup when noth
     deleteGuestProfilesByOwnerUserId: async (userId) => {
       calls.push(['deleteGuestProfilesByOwnerUserId', userId])
     },
+    deleteSoloGameResultsByOwnerUserId: async (userId) => {
+      calls.push(['deleteSoloGameResultsByOwnerUserId', userId])
+    },
     deleteProfileById: async (userId) => {
       calls.push(['deleteProfileById', userId])
     },
@@ -151,6 +158,7 @@ test('deleteAccountAndData skips owned-session and owned-guest cleanup when noth
     ['deleteSessionPlayersByUserId', 'user-1'],
     ['unlinkGuestProfilesByLinkedUserId', 'user-1'],
     ['deleteGuestProfilesByOwnerUserId', 'user-1'],
+    ['deleteSoloGameResultsByOwnerUserId', 'user-1'],
     ['deleteProfileById', 'user-1'],
     ['deleteAuthUserById', 'user-1'],
   ])
@@ -187,6 +195,7 @@ test('deleteAccountAndData stops when a delete step fails', async () => {
         deleteSessionPlayersByUserId: async () => undefined,
         unlinkGuestProfilesByLinkedUserId: async () => undefined,
         deleteGuestProfilesByOwnerUserId: async () => undefined,
+        deleteSoloGameResultsByOwnerUserId: async () => undefined,
         deleteProfileById: async () => undefined,
         deleteAuthUserById: async () => undefined,
       }),

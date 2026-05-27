@@ -2,6 +2,7 @@ export type ProtectedAnalyticsPath =
   | '/player-stats'
   | '/duke-stats'
   | '/global-trends'
+  | '/solo-stats'
   | '/profile'
 
 export type ProtectedAnalyticsSessionSnapshot =
@@ -42,6 +43,10 @@ const BLOCKED_COPY: Record<
   '/global-trends': {
     title: 'Sign in to view global trends',
     body: 'Meta snapshots, tier lists, and game-shape charts are only available after you sign in.',
+  },
+  '/solo-stats': {
+    title: 'Sign in to view solo statistics',
+    body: 'Solo win-loss tracking and solo duke analytics are only available after you sign in.',
   },
   '/profile': {
     title: 'Sign in to view your profile',

@@ -7,6 +7,7 @@ import CompareHeroCard from '../components/CompareHeroCard'
 import CompareScoresCard from '../components/CompareScoresCard'
 import CompareStatsRow from '../components/CompareStatsRow'
 import CompareStatusStack from '../components/CompareStatusStack'
+import FinishTiebreakModal from '../components/FinishTiebreakModal'
 import ManageAccountModal from '../components/ManageAccountModal'
 import SessionContextStrip from '../components/SessionContextStrip'
 import ValeriaHeader from '../components/ValeriaHeader'
@@ -21,6 +22,12 @@ import {
 import { type CompareEntry } from '../lib/compare-entries'
 import { resolveCompareGuestRemovalMode } from '../lib/compare-guest-removal'
 import { buildCompareEntryScoreRoute } from '../lib/compare-score-route'
+import {
+  buildOrderedTiebreakScoreIds,
+  getTopScoreTiedEntries,
+  hasTopScoreTie,
+  isCompleteTiebreakSelection,
+} from '../lib/finish-tie-resolution'
 import { copyJoinCodeWithFeedback } from '../lib/copy-join-code-client'
 import { deleteOwnedGame } from '../lib/manage'
 import {
@@ -36,7 +43,7 @@ import {
   subscribeToSessionActivity,
   subscribeToSessionScores,
 } from '../lib/realtime'
-import { getBottomNavTopClearance } from '../lib/bottom-nav-layout'
+import { getBottomNavClearance } from '../lib/bottom-nav-layout'
 import {
   MAX_COMPARE_PLAYER_COUNT,
   MIN_COMPARE_PLAYER_COUNT,
@@ -50,7 +57,10 @@ import {
   removeGuestPlayerFromSession,
 } from '../lib/sessions'
 import { resolveSessionRouteContext } from '../lib/session-route-context'
-import { finishGameViaRpc } from '../lib/session-admin-flow'
+import {
+  finishGameViaRpc,
+  finishGameWithTiebreakViaRpc,
+} from '../lib/session-admin-flow'
 import { supabase } from '../lib/supabase'
 import { Alert } from '../lib/themed-alert'
 import { buildVictoryRoute } from '../lib/victory-route'
@@ -84,9 +94,13 @@ export default function CompareScreen() {
   const [sessionCreatorId, setSessionCreatorId] = useState('')
   const [currentUserId, setCurrentUserId] = useState('')
   const [expectedPlayerCount, setExpectedPlayerCount] = useState(MIN_COMPARE_PLAYER_COUNT)
+  const [scoreRevision, setScoreRevision] = useState(1)
   const [savingPlayerTarget, setSavingPlayerTarget] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [loadNotice, setLoadNotice] = useState('')
+  const [tiebreakVisible, setTiebreakVisible] = useState(false)
+  const [tiebreakPlacements, setTiebreakPlacements] = useState<Record<string, number>>({})
+  const [activeTieKey, setActiveTieKey] = useState('')
   const [effectiveSessionId, setEffectiveSessionId] = useState(
     typeof routeSessionId === 'string' ? routeSessionId : ''
   )
@@ -101,8 +115,9 @@ export default function CompareScreen() {
         entries: scores,
         sessionCreatorId,
         expectedPlayerCount,
+        scoreRevision,
       }),
-    [expectedPlayerCount, scores, sessionCreatorId]
+    [expectedPlayerCount, scoreRevision, scores, sessionCreatorId]
   )
   const {
     savedScoreCount,
@@ -118,6 +133,19 @@ export default function CompareScreen() {
     Boolean(effectiveSessionId) && progress.trackedParticipants < MAX_COMPARE_PLAYER_COUNT
   const canFinish =
     progress.allReady && canFinishScores && !finishing && !savingPlayerTarget && isCreator
+  const topTiedEntries = useMemo(() => getTopScoreTiedEntries(scores), [scores])
+  const currentTieKey = useMemo(
+    () =>
+      topTiedEntries
+        .map((entry) => `${entry.scoreId}:${entry.totalScore}`)
+        .sort()
+        .join('|'),
+    [topTiedEntries]
+  )
+  const canSaveTiebreak = useMemo(
+    () => isCompleteTiebreakSelection(topTiedEntries, tiebreakPlacements),
+    [tiebreakPlacements, topTiedEntries]
+  )
   const playerCountChoices = useMemo(
     () =>
       buildComparePlayerCountChoices({
@@ -151,6 +179,7 @@ export default function CompareScreen() {
     setSessionCreatorId('')
     setCurrentUserId('')
     setExpectedPlayerCount(MIN_COMPARE_PLAYER_COUNT)
+    setScoreRevision(1)
     setLoadNotice('')
     setLoadError(errorMessage)
   }, [])
@@ -197,6 +226,7 @@ export default function CompareScreen() {
         setIsCreator(dashboardData.isCreator)
         setSessionCreatorId(dashboardData.sessionCreatorId)
         setExpectedPlayerCount(dashboardData.expectedPlayerCount)
+        setScoreRevision(dashboardData.scoreRevision)
         setScores(dashboardData.scores)
         setLoadNotice(dashboardData.loadNotice)
         setLoadError('')
@@ -228,6 +258,10 @@ export default function CompareScreen() {
 
   const goToGlobalTrends = useCallback(() => {
     router.push('/global-trends')
+  }, [])
+
+  const goToSoloStats = useCallback(() => {
+    router.push('/solo-stats' as never)
   }, [])
 
   const goToManageData = useCallback(() => {
@@ -438,6 +472,13 @@ export default function CompareScreen() {
       return
     }
 
+    if (hasTopScoreTie(scores)) {
+      setActiveTieKey(currentTieKey)
+      setTiebreakPlacements({})
+      setTiebreakVisible(true)
+      return
+    }
+
     const copy = buildDangerFlowCopy('finishGame')
 
     Alert.alert(copy.title, copy.body, [
@@ -471,7 +512,53 @@ export default function CompareScreen() {
     finishBlockTitle,
     fetchScores,
     isCreator,
+    currentTieKey,
     progress.allReady,
+    scores,
+  ])
+
+  const handleSelectTiebreakPlacement = useCallback((scoreId: string, placement: number) => {
+    setTiebreakPlacements((current) => ({
+      ...current,
+      [scoreId]: placement,
+    }))
+  }, [])
+
+  const closeTiebreakModal = useCallback(() => {
+    setTiebreakVisible(false)
+    setTiebreakPlacements({})
+    setActiveTieKey('')
+  }, [])
+
+  const handleSaveTiebreak = useCallback(async () => {
+    if (!effectiveSessionId || !canSaveTiebreak) {
+      return
+    }
+
+    try {
+      setFinishing(true)
+      await finishGameWithTiebreakViaRpc(
+        effectiveSessionId,
+        buildOrderedTiebreakScoreIds(tiebreakPlacements),
+        {
+          invokeRpc: async (fn, args) => supabase.rpc(fn, args),
+        }
+      )
+      closeTiebreakModal()
+      await fetchScores(false)
+      router.replace(buildVictoryRoute(effectiveSessionId, effectiveJoinCode) as never)
+    } catch (err: any) {
+      Alert.alert('Finish failed', err?.message ?? 'Unknown error')
+    } finally {
+      setFinishing(false)
+    }
+  }, [
+    canSaveTiebreak,
+    closeTiebreakModal,
+    effectiveJoinCode,
+    effectiveSessionId,
+    fetchScores,
+    tiebreakPlacements,
   ])
 
   useEffect(() => {
@@ -481,7 +568,22 @@ export default function CompareScreen() {
   useEffect(() => {
     autoRoutedToVictoryRef.current = false
     didFocusRefreshRef.current = false
+    closeTiebreakModal()
   }, [effectiveSessionId])
+
+  useEffect(() => {
+    if (!tiebreakVisible) {
+      return
+    }
+
+    if (!currentTieKey || currentTieKey !== activeTieKey) {
+      closeTiebreakModal()
+      Alert.alert(
+        'Standings changed',
+        'The tied top scorers changed while you were deciding. Review the updated standings and tap Finish Game again.'
+      )
+    }
+  }, [activeTieKey, closeTiebreakModal, currentTieKey, tiebreakVisible])
 
   useFocusEffect(
     useCallback(() => {
@@ -674,8 +776,7 @@ export default function CompareScreen() {
           contentContainerStyle={[
             styles.content,
             {
-              paddingTop: getBottomNavTopClearance(insets.top),
-              paddingBottom: insets.bottom + 24,
+              paddingBottom: getBottomNavClearance(insets.bottom),
             },
           ]}
           showsVerticalScrollIndicator={false}
@@ -740,6 +841,7 @@ export default function CompareScreen() {
             onPressPlayerStats={goToPlayerStats}
             onPressDukeStats={goToDukeStats}
             onPressGlobalTrends={goToGlobalTrends}
+            onPressSoloStats={goToSoloStats}
           />
         </ScrollView>
 
@@ -749,6 +851,17 @@ export default function CompareScreen() {
           message={manageAccountAlertCopy.message}
           actions={accountMenuActions}
           onRequestClose={() => setAccountMenuVisible(false)}
+        />
+
+        <FinishTiebreakModal
+          visible={tiebreakVisible}
+          entries={topTiedEntries}
+          placements={tiebreakPlacements}
+          canSave={canSaveTiebreak}
+          saving={finishing}
+          onSelectPlacement={handleSelectTiebreakPlacement}
+          onCancel={closeTiebreakModal}
+          onSave={handleSaveTiebreak}
         />
       </View>
     </ImageBackground>

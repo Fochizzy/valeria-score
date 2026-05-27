@@ -30,11 +30,13 @@ function requireSessionId(sessionId: string) {
 async function invokeSessionRpc(
   sessionId: string,
   rpcName: string,
+  rpcArgs: Record<string, unknown>,
   deps: { invokeRpc: RpcInvoker }
 ) {
   const safeSessionId = requireSessionId(sessionId)
   const result = await deps.invokeRpc(rpcName, {
     p_session_id: safeSessionId,
+    ...rpcArgs,
   })
 
   if (result.error) {
@@ -47,7 +49,7 @@ export async function deleteInProgressSessionViaRpc(
   deps: { invokeRpc: RpcInvoker }
 ) {
   try {
-    await invokeSessionRpc(sessionId, 'delete_in_progress_session', deps)
+    await invokeSessionRpc(sessionId, 'delete_in_progress_session', {}, deps)
   } catch (error: any) {
     const message = error?.message ?? 'Unable to complete the session action.'
 
@@ -55,7 +57,7 @@ export async function deleteInProgressSessionViaRpc(
       throw error
     }
 
-    await invokeSessionRpc(sessionId, 'delete_game', deps)
+    await invokeSessionRpc(sessionId, 'delete_game', {}, deps)
   }
 }
 
@@ -63,5 +65,27 @@ export async function finishGameViaRpc(
   sessionId: string,
   deps: { invokeRpc: RpcInvoker }
 ) {
-  await invokeSessionRpc(sessionId, 'finish_game', deps)
+  await invokeSessionRpc(sessionId, 'finish_game', {}, deps)
+}
+
+export async function finishGameWithTiebreakViaRpc(
+  sessionId: string,
+  orderedScoreIds: string[],
+  deps: { invokeRpc: RpcInvoker }
+) {
+  await invokeSessionRpc(
+    sessionId,
+    'finish_game_with_tiebreak',
+    {
+      p_tiebreak_score_ids: orderedScoreIds,
+    },
+    deps
+  )
+}
+
+export async function reopenFinishedGameViaRpc(
+  sessionId: string,
+  deps: { invokeRpc: RpcInvoker }
+) {
+  await invokeSessionRpc(sessionId, 'reopen_finished_game', {}, deps)
 }

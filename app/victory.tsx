@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
   Image,
   ImageBackground,
+  Platform,
   Pressable,
   ScrollView,
   Share,
@@ -10,6 +13,7 @@ import {
   Text,
   View,
 } from 'react-native'
+import * as Haptics from 'expo-haptics'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import VictoryFireworks from '../components/VictoryFireworks'
@@ -24,8 +28,7 @@ import {
   type CompareProfileRow,
   type CompareScoreRow,
 } from '../lib/compare-entries'
-import { copyJoinCodeWithFeedback } from '../lib/copy-join-code-client'
-import { getBottomNavClearance } from '../lib/bottom-nav-layout'
+import { clearActiveSessionState } from '../lib/sessions'
 import { supabase } from '../lib/supabase'
 import {
   buildResultsShareMessage,
@@ -33,6 +36,73 @@ import {
 } from '../lib/victory-results'
 
 const compareBackdrop = require('../assets/compare.png')
+
+// ── Entrance animation timing ──────────────────────────────────────────
+const WINNER_CARD_DELAY = 200
+const WINNER_CARD_DURATION = 500
+const LEADERBOARD_DELAY = 600
+const LEADERBOARD_ROW_STAGGER = 120
+const LEADERBOARD_ROW_DURATION = 400
+const BUTTONS_DELAY_AFTER_LAST_ROW = 200
+const BUTTONS_DURATION = 350
+
+// ── Score count-up ─────────────────────────────────────────────────────
+const COUNT_UP_DURATION = 1600
+const COUNT_UP_START_DELAY = WINNER_CARD_DELAY + 300
+
+function CountUpScore({ target }: { target: number }) {
+  const [display, setDisplay] = useState(0)
+
+  useEffect(() => {
+    if (target <= 0) {
+      setDisplay(target)
+      return
+    }
+
+    const start = Date.now()
+    let raf: number
+
+    function tick() {
+      const elapsed = Date.now() - start
+      const progress = Math.min(elapsed / COUNT_UP_DURATION, 1)
+      // ease-out cubic
+      const eased = 1 - Math.pow(1 - progress, 3)
+      setDisplay(Math.round(eased * target))
+
+      if (progress < 1) {
+        raf = requestAnimationFrame(tick)
+      }
+    }
+
+    const timeout = setTimeout(() => {
+      raf = requestAnimationFrame(tick)
+    }, COUNT_UP_START_DELAY)
+
+    return () => {
+      clearTimeout(timeout)
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [target])
+
+  return <Text style={styles.scorePillValue}>{display}</Text>
+}
+
+// ── Haptic fanfare ─────────────────────────────────────────────────────
+async function playHapticFanfare() {
+  if (Platform.OS === 'web') return
+
+  try {
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+    await new Promise((r) => setTimeout(r, 200))
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
+    await new Promise((r) => setTimeout(r, 150))
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy)
+    await new Promise((r) => setTimeout(r, 150))
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+  } catch {
+    // Haptics not available on this device — fail silently
+  }
+}
 
 const FULL_SCORE_SELECT =
   'id, session_id, owner_user_id, player_name, guest_profile_id, guest_entry_id, recap_player_name, recap_player_id, duke_slug, score_total, game_locked, placement, is_winner'
@@ -90,18 +160,20 @@ async function loadSessionScoreRows(sessionId: string) {
 
 export default function VictoryScreen() {
   const insets = useSafeAreaInsets()
-  const params = useLocalSearchParams<{
-    sessionId?: string
-    joinCode?: string
-  }>()
+  const params = useLocalSearchParams<{ sessionId?: string }>()
   const sessionId = typeof params.sessionId === 'string' ? params.sessionId : ''
-  const joinCode = typeof params.joinCode === 'string' ? params.joinCode : ''
 
   const [scores, setScores] = useState<CompareEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [loadNotice, setLoadNotice] = useState('')
   const [sharing, setSharing] = useState(false)
+
+  // ── Entrance animations ────────────────────────────────────────────
+  const winnerCardAnim = useRef(new Animated.Value(0)).current
+  const leaderboardRowAnims = useRef<Animated.Value[]>([]).current
+  const buttonsAnim = useRef(new Animated.Value(0)).current
+  const hasPlayedEntrance = useRef(false)
 
   const finalScores = useMemo(
     () => scores.filter((entry) => entry.hasScore),
@@ -187,6 +259,67 @@ export default function VictoryScreen() {
     void loadVictoryScores()
   }, [loadVictoryScores])
 
+  useEffect(() => {
+    if (!sessionId) {
+      return
+    }
+
+    void clearActiveSessionState()
+  }, [sessionId])
+
+  // ── Kick off staggered entrance + haptics once data arrives ────────
+  useEffect(() => {
+    if (loading || loadError || hasPlayedEntrance.current) return
+    if (finalScores.length === 0 && !winner) return
+
+    hasPlayedEntrance.current = true
+
+    // Ensure we have enough Animated.Values for every leaderboard row
+    while (leaderboardRowAnims.length < finalScores.length) {
+      leaderboardRowAnims.push(new Animated.Value(0))
+    }
+
+    // Haptic fanfare
+    void playHapticFanfare()
+
+    // Winner card slides in
+    const winnerAnim = Animated.timing(winnerCardAnim, {
+      toValue: 1,
+      duration: WINNER_CARD_DURATION,
+      delay: WINNER_CARD_DELAY,
+      easing: Easing.out(Easing.back(1.2)),
+      useNativeDriver: true,
+    })
+
+    // Each leaderboard row staggers in
+    const rowAnims = leaderboardRowAnims
+      .slice(0, finalScores.length)
+      .map((anim, index) =>
+        Animated.timing(anim, {
+          toValue: 1,
+          duration: LEADERBOARD_ROW_DURATION,
+          delay: LEADERBOARD_DELAY + index * LEADERBOARD_ROW_STAGGER,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        })
+      )
+
+    // Buttons fade in after the last row
+    const totalRowDelay =
+      LEADERBOARD_DELAY +
+      (finalScores.length - 1) * LEADERBOARD_ROW_STAGGER +
+      LEADERBOARD_ROW_DURATION
+    const btnAnim = Animated.timing(buttonsAnim, {
+      toValue: 1,
+      duration: BUTTONS_DURATION,
+      delay: totalRowDelay + BUTTONS_DELAY_AFTER_LAST_ROW,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    })
+
+    Animated.parallel([winnerAnim, ...rowAnims, btnAnim]).start()
+  }, [loading, loadError, finalScores, winner, winnerCardAnim, leaderboardRowAnims, buttonsAnim])
+
   async function handleShareResults() {
     try {
       setSharing(true)
@@ -200,10 +333,6 @@ export default function VictoryScreen() {
       setSharing(false)
     }
   }
-
-  const handleCopyJoinCode = useCallback(async () => {
-    await copyJoinCodeWithFeedback(joinCode)
-  }, [joinCode])
 
   return (
     <ImageBackground
@@ -219,7 +348,7 @@ export default function VictoryScreen() {
           style={styles.screen}
           contentContainerStyle={[
             styles.content,
-            { paddingBottom: getBottomNavClearance(insets.bottom) },
+            { paddingBottom: insets.bottom + 16 },
           ]}
           showsVerticalScrollIndicator={false}
         >
@@ -229,19 +358,6 @@ export default function VictoryScreen() {
             title="Victory"
             subtitle="Final standings"
           />
-
-          {joinCode ? (
-            <Pressable
-              style={({ pressed }) => [
-                styles.joinCodePill,
-                pressed && styles.buttonPressed,
-              ]}
-              onPress={handleCopyJoinCode}
-            >
-              <Text style={styles.joinCodeLabel}>Join Code</Text>
-              <Text style={styles.joinCodeValue}>{joinCode}</Text>
-            </Pressable>
-          ) : null}
 
           {loading ? (
             <View style={styles.statusCard}>
@@ -278,7 +394,7 @@ export default function VictoryScreen() {
                   ]}
                   onPress={() => router.replace('/create-session')}
                 >
-                  <Text style={styles.primaryButtonText}>Home Page</Text>
+                  <Text style={styles.primaryButtonText}>Game Hub</Text>
                 </Pressable>
               </View>
             </View>
@@ -292,8 +408,29 @@ export default function VictoryScreen() {
           ) : null}
 
           {!loading && !loadError && winner ? (
-            <View style={styles.winnerCard}>
-              <Text style={styles.winnerKicker}>Winner</Text>
+            <Animated.View
+              style={[
+                styles.winnerCard,
+                {
+                  opacity: winnerCardAnim,
+                  transform: [
+                    {
+                      translateY: winnerCardAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [-30, 0],
+                      }),
+                    },
+                    {
+                      scale: winnerCardAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.92, 1],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            >
+              <Text style={styles.winnerKicker}>{'👑 '}Winner</Text>
 
               <View style={styles.winnerTopRow}>
                 <View style={styles.winnerCopy}>
@@ -309,7 +446,7 @@ export default function VictoryScreen() {
                 </View>
 
                 <View style={styles.scorePill}>
-                  <Text style={styles.scorePillValue}>{winner.totalScore}</Text>
+                  <CountUpScore target={winner.totalScore} />
                   <Text style={styles.scorePillLabel}>PTS</Text>
                 </View>
               </View>
@@ -330,10 +467,10 @@ export default function VictoryScreen() {
                 </View>
 
                 <View style={styles.winnerBadge}>
-                  <Text style={styles.winnerBadgeText}>Final Rank #{winner.placement ?? 1}</Text>
+                  <Text style={styles.winnerBadgeText}>{'👑 '}Final Rank #{winner.placement ?? 1}</Text>
                 </View>
               </View>
-            </View>
+            </Animated.View>
           ) : null}
 
           {!loading && !loadError ? (
@@ -343,48 +480,65 @@ export default function VictoryScreen() {
               {finalScores.length === 0 ? (
                 <Text style={styles.emptyText}>No final scores were available for this session.</Text>
               ) : (
-                finalScores.map((entry, index) => (
-                  <View key={entry.id} style={styles.scoreRow}>
-                    <View style={styles.rankBadge}>
-                      <Text style={styles.rankBadgeText}>
-                        {entry.placement ?? index + 1}
-                      </Text>
-                    </View>
+                finalScores.map((entry, index) => {
+                  const rowAnim = leaderboardRowAnims[index]
+                  const animStyle = rowAnim
+                    ? {
+                        opacity: rowAnim,
+                        transform: [
+                          {
+                            translateX: rowAnim.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [60, 0],
+                            }),
+                          },
+                        ],
+                      }
+                    : {}
 
-                    <View style={styles.rowThumbWrap}>
-                      {entry.dukeSlug && cardImages[entry.dukeSlug] ? (
-                        <Image
-                          source={cardImages[entry.dukeSlug]}
-                          style={styles.rowThumb}
-                          resizeMode="cover"
-                        />
-                      ) : (
-                        <View style={styles.rowThumbFallback}>
-                          <Text style={styles.rowThumbFallbackText}>No Duke</Text>
-                        </View>
-                      )}
-                    </View>
+                  return (
+                    <Animated.View key={entry.id} style={[styles.scoreRow, animStyle]}>
+                      <View style={styles.rankBadge}>
+                        <Text style={styles.rankBadgeText}>
+                          {entry.placement ?? index + 1}
+                        </Text>
+                      </View>
 
-                    <View style={styles.rowMeta}>
-                      <Text style={styles.rowName}>
-                        {entry.label}
-                        {entry.isGuest ? ' (Guest)' : ''}
-                      </Text>
-                      <Text style={styles.rowSub}>
-                        {entry.playerId ? `ID: ${entry.playerId} - ` : ''}
-                        {entry.dukeName}
-                      </Text>
-                    </View>
+                      <View style={styles.rowThumbWrap}>
+                        {entry.dukeSlug && cardImages[entry.dukeSlug] ? (
+                          <Image
+                            source={cardImages[entry.dukeSlug]}
+                            style={styles.rowThumb}
+                            resizeMode="cover"
+                          />
+                        ) : (
+                          <View style={styles.rowThumbFallback}>
+                            <Text style={styles.rowThumbFallbackText}>No Duke</Text>
+                          </View>
+                        )}
+                      </View>
 
-                    <Text style={styles.rowScore}>{entry.totalScore}</Text>
-                  </View>
-                ))
+                      <View style={styles.rowMeta}>
+                        <Text style={styles.rowName}>
+                          {entry.label}
+                          {entry.isGuest ? ' (Guest)' : ''}
+                        </Text>
+                        <Text style={styles.rowSub}>
+                          {entry.playerId ? `ID: ${entry.playerId} - ` : ''}
+                          {entry.dukeName}
+                        </Text>
+                      </View>
+
+                      <Text style={styles.rowScore}>{entry.totalScore}</Text>
+                    </Animated.View>
+                  )
+                })
               )}
             </View>
           ) : null}
 
           {!loading && !loadError ? (
-            <View style={styles.inlineButtons}>
+            <Animated.View style={[styles.inlineButtons, { opacity: buttonsAnim }]}>
               <Pressable
                 style={({ pressed }) => [
                   styles.secondaryButton,
@@ -406,9 +560,9 @@ export default function VictoryScreen() {
                 ]}
                 onPress={() => router.replace('/create-session')}
               >
-                <Text style={styles.primaryButtonText}>Home Page</Text>
+                <Text style={styles.primaryButtonText}>Game Hub</Text>
               </Pressable>
-            </View>
+            </Animated.View>
           ) : null}
         </ScrollView>
       </View>
@@ -439,35 +593,6 @@ const styles = StyleSheet.create({
   content: {
     padding: 10,
     paddingTop: 4,
-  },
-
-  joinCodePill: {
-    alignSelf: 'center',
-    flexDirection: 'row',
-    gap: 6,
-    alignItems: 'center',
-    borderRadius: theme.radius.pill,
-    borderWidth: 1,
-    borderColor: 'rgba(244, 200, 92, 0.5)',
-    backgroundColor: 'rgba(31, 22, 52, 0.9)',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    marginBottom: 12,
-  },
-
-  joinCodeLabel: {
-    color: theme.colors.textMuted,
-    fontSize: 10,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 0.7,
-  },
-
-  joinCodeValue: {
-    color: theme.colors.gold,
-    fontSize: 12,
-    fontWeight: '900',
-    letterSpacing: 1,
   },
 
   statusCard: {

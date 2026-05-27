@@ -13,6 +13,7 @@ import {
   View,
 } from 'react-native'
 import { router } from 'expo-router'
+import * as Linking from 'expo-linking'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import OnboardingMasthead from '../components/OnboardingMasthead'
 import PasswordVisibilityToggle from '../components/PasswordVisibilityToggle'
@@ -24,7 +25,9 @@ import {
   normalizeClaimGuestInput,
 } from '../lib/claim-guest-flow'
 import { createUserOrRecoverExistingAccount } from '../lib/create-user-flow'
+import { buildEmailConfirmationRedirectUrl } from '../lib/email-confirmation-redirect'
 import { getOnboardingMastheadContent } from '../lib/onboarding-masthead'
+import { normalizePlayerId } from '../lib/player-id'
 import { ensureProfileRow, getMyProfile } from '../lib/profile'
 
 const masthead = getOnboardingMastheadContent('create-user')
@@ -36,7 +39,6 @@ export default function CreateUserScreen() {
   const [displayName, setDisplayName] = useState('')
   const [loading, setLoading] = useState(false)
   const [claimGuestExpanded, setClaimGuestExpanded] = useState(false)
-  const [guestDisplayName, setGuestDisplayName] = useState('')
   const [guestPlayerId, setGuestPlayerId] = useState('')
   const scrollRef = useRef<ScrollView | null>(null)
   const fieldRefs = useRef<Record<string, View | null>>({})
@@ -91,12 +93,11 @@ export default function CreateUserScreen() {
     try {
       pendingGuestClaim = claimGuestExpanded
         ? normalizeClaimGuestInput({
-            displayName: guestDisplayName,
             publicPlayerId: guestPlayerId,
           })
         : null
     } catch (err: any) {
-      Alert.alert('Check guest fields', err?.message ?? 'Both guest fields are required.')
+      Alert.alert('Check guest fields', err?.message ?? 'Enter the guest Player ID.')
       return
     }
 
@@ -109,6 +110,7 @@ export default function CreateUserScreen() {
           password,
           displayName: safeName,
           extraSignUpMetadata: buildSignUpClaimMetadata(pendingGuestClaim),
+          emailRedirectTo: buildEmailConfirmationRedirectUrl(Linking.createURL),
         },
         {
           signUp: (input) => supabase.auth.signUp(input),
@@ -231,29 +233,16 @@ export default function CreateUserScreen() {
               {claimGuestExpanded ? (
                 <View style={styles.claimSection}>
                   <Text style={styles.claimHelper}>
-                    Enter the exact display name and player ID of the guest you previously played
-                    as. Your past games and stats will move to this new account.
+                    Enter the guest Player ID you previously used. We will verify that guest
+                    the same way the app reuses guest profiles for a game, then move those
+                    stats onto this account after you confirm your email.
                   </Text>
-
-                  <View ref={setFieldRef('guestDisplayName')} collapsable={false}>
-                    <Text style={styles.label}>Guest Display Name</Text>
-                    <TextInput
-                      value={guestDisplayName}
-                      onChangeText={setGuestDisplayName}
-                      onFocus={() => scrollFieldIntoView('guestDisplayName')}
-                      autoCapitalize="words"
-                      autoCorrect={false}
-                      placeholder="Example: Mary"
-                      placeholderTextColor="#A79BC9"
-                      style={styles.input}
-                    />
-                  </View>
 
                   <View ref={setFieldRef('guestPlayerId')} collapsable={false}>
                     <Text style={styles.label}>Guest Player ID</Text>
                     <TextInput
                       value={guestPlayerId}
-                      onChangeText={setGuestPlayerId}
+                      onChangeText={(text) => setGuestPlayerId(normalizePlayerId(text))}
                       onFocus={() => scrollFieldIntoView('guestPlayerId')}
                       autoCapitalize="characters"
                       autoCorrect={false}

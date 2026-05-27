@@ -11,12 +11,15 @@ import {
 import { router, useLocalSearchParams } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
+import FrequentOpponentsCard from '../components/FrequentOpponentsCard'
 import ManageAccountModal from '../components/ManageAccountModal'
 import ValeriaHeader from '../components/ValeriaHeader'
 import { theme } from '../constants/theme'
 import { Alert } from '../lib/themed-alert'
-import { getBottomNavTopClearance } from '../lib/bottom-nav-layout'
+import { getBottomNavClearance } from '../lib/bottom-nav-layout'
 import { formatDukeName } from '../lib/duke-names'
+import { loadFrequentOpponents } from '../lib/frequent-opponents-fetch'
+import type { FrequentOpponent } from '../lib/frequent-opponents'
 import { getGuestProfileLabels } from '../lib/guest-profile-identity'
 import { logoutAndClearActiveSessionState } from '../lib/logout'
 import {
@@ -134,14 +137,14 @@ function buildGuestInsights(guest: GuestProfile | null): CategoryInsight[] {
         games > 0
           ? `${labels.title} has ${wins} ${wins === 1 ? 'win' : 'wins'} and ${losses} ${
               losses === 1 ? 'loss' : 'losses'
-            } across ${games} tracked ${games === 1 ? 'game' : 'games'}.`
-          : `${labels.title} does not have any tracked games yet.`,
+            } across ${games} finalized ${games === 1 ? 'game' : 'games'}.`
+          : `${labels.title} does not have any finalized games yet.`,
     },
     {
       title: 'Win Rate',
       body:
         games > 0
-          ? `${labels.title} wins ${winRate}% of tracked games.`
+          ? `${labels.title} wins ${winRate}% of finalized games.`
           : 'Win rate will appear after this guest has locked scores.',
     },
     {
@@ -180,6 +183,8 @@ export default function ProfileScreen() {
   const [loadError, setLoadError] = useState('')
   const [viewerUserId, setViewerUserId] = useState<string | null | undefined>(undefined)
   const [categoryInsights, setCategoryInsights] = useState<CategoryInsight[]>([])
+  const [frequentOpponents, setFrequentOpponents] = useState<FrequentOpponent[]>([])
+  const [frequentOpponentsLoading, setFrequentOpponentsLoading] = useState(false)
   const didLoadOnceRef = useRef(false)
 
   const selectedGuest = useMemo(() => {
@@ -190,6 +195,11 @@ export default function ProfileScreen() {
   }, [activeGuestProfileId, dashboard.sharedGuestProfiles])
 
   const viewingGuestProfile = Boolean(activeGuestProfileId)
+  const sharedGuestProfilesById = useMemo(
+    () =>
+      new Map(dashboard.sharedGuestProfiles.map((guest) => [guest.id, guest] as const)),
+    [dashboard.sharedGuestProfiles]
+  )
 
   const selectedGuestLabels = useMemo(() => {
     if (!selectedGuest) return null
@@ -302,14 +312,36 @@ export default function ProfileScreen() {
   const summaryNarrative = useMemo(() => {
     if (summary.games === 0) {
       return viewingGuestProfile
-        ? 'No tracked guest games yet'
-        : 'No tracked games yet — locked scores show up here.'
+        ? 'No finalized guest games yet'
+        : 'No finalized games yet — locked scores show up here.'
     }
 
     const winRate = summary.games > 0 ? Math.round((summary.wins / summary.games) * 100) : 0
 
-    return `${summary.games} tracked game${summary.games === 1 ? '' : 's'} · ${winRate}% wins`
+    return `${summary.games} finalized game${summary.games === 1 ? '' : 's'} · ${winRate}% wins`
   }, [summary.games, summary.wins, viewingGuestProfile])
+
+  const refreshFrequentOpponents = useCallback(async () => {
+    if (!viewerUserId) {
+      setFrequentOpponents([])
+      return
+    }
+
+    try {
+      setFrequentOpponentsLoading(true)
+      const nextOpponents = await loadFrequentOpponents(viewerUserId, 5)
+      setFrequentOpponents(nextOpponents)
+    } catch (error) {
+      console.error('Failed to load profile frequent opponents', error)
+      setFrequentOpponents([])
+    } finally {
+      setFrequentOpponentsLoading(false)
+    }
+  }, [viewerUserId])
+
+  useEffect(() => {
+    void refreshFrequentOpponents()
+  }, [refreshFrequentOpponents])
 
   const handleLogout = useCallback(async () => {
     try {
@@ -374,6 +406,28 @@ export default function ProfileScreen() {
     router.replace('/profile')
   }, [])
 
+  const openFrequentOpponentStats = useCallback((playerKey: string) => {
+    router.push({
+      pathname: '/player-stats',
+      params: { playerKey },
+    })
+  }, [])
+
+  const handleFrequentOpponentLongPress = useCallback(
+    (playerKey: string) => {
+      if (playerKey.startsWith('guest:')) {
+        const guest = sharedGuestProfilesById.get(playerKey.slice('guest:'.length))
+        if (guest) {
+          openGuestProfile(guest)
+          return
+        }
+      }
+
+      openFrequentOpponentStats(playerKey)
+    },
+    [openFrequentOpponentStats, openGuestProfile, sharedGuestProfilesById]
+  )
+
   return (
     <View style={styles.pageBackground}>
       <View style={styles.pageScrim}>
@@ -382,8 +436,7 @@ export default function ProfileScreen() {
           contentContainerStyle={[
             styles.content,
             {
-              paddingTop: getBottomNavTopClearance(insets.top),
-              paddingBottom: insets.bottom + 24,
+              paddingBottom: getBottomNavClearance(insets.bottom),
             },
           ]}
           refreshControl={
@@ -479,7 +532,7 @@ export default function ProfileScreen() {
                 <View style={styles.summaryRow}>
                   <View style={styles.summaryBox}>
                     <Text style={styles.summaryValue}>{summary.games}</Text>
-                    <Text style={styles.summaryLabel}>Games</Text>
+                    <Text style={styles.summaryLabel}>Finalized</Text>
                   </View>
 
                   <View style={styles.summaryBox}>
@@ -561,6 +614,39 @@ export default function ProfileScreen() {
                 </View>
               ) : null}
 
+              {!viewingGuestProfile ? (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.analyticsLinkCard,
+                    styles.analyticsSoloLinkCard,
+                    pressed && styles.analyticsLinkCardPressed,
+                  ]}
+                  onPress={() => router.push('/solo-stats' as never)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open Solo Statistics"
+                >
+                  <Text style={styles.analyticsLinkKicker}>Campaign</Text>
+                  <Text style={styles.analyticsLinkTitle}>Solo Statistics</Text>
+                  <Text style={styles.analyticsLinkSub}>
+                    Isolated solo wins, losses, and duke scoring trends.
+                  </Text>
+                  <View style={styles.analyticsLinkCta}>
+                    <Text style={styles.analyticsLinkCtaText}>Open â†’</Text>
+                  </View>
+                </Pressable>
+              ) : null}
+
+              {!viewingGuestProfile ? (
+                <FrequentOpponentsCard
+                  opponents={frequentOpponents}
+                  loading={frequentOpponentsLoading}
+                  onSelect={openFrequentOpponentStats}
+                  onLongPress={handleFrequentOpponentLongPress}
+                  title="Most Played Opponents"
+                  hintText="Tap a player to compare stats. Hold a shared guest to open their profile."
+                />
+              ) : null}
+
               <View style={styles.sectionCard}>
                 <Text style={[styles.sectionTitle, styles.sectionTitleStandalone]}>
                   What The Numbers Say
@@ -605,7 +691,7 @@ export default function ProfileScreen() {
                   <View style={styles.sectionHeader}>
                     <Text style={styles.sectionTitle}>Recent Games</Text>
                     {history.length > 0 ? (
-                      <Text style={styles.sectionMeta}>{history.length} tracked</Text>
+                      <Text style={styles.sectionMeta}>{history.length} finalized</Text>
                     ) : null}
                   </View>
 
@@ -617,10 +703,9 @@ export default function ProfileScreen() {
 
                   {history.length === 0 ? (
                     <View style={styles.emptyStateCard}>
-                      <Text style={styles.emptyTitle}>No games recorded yet</Text>
+                      <Text style={styles.emptyTitle}>No finalized games yet</Text>
                       <Text style={styles.emptyText}>
-                        Start or join a session to see your scores, placements, and duke history
-                        here.
+                        Finish a game to see your locked scores, placements, and duke history here.
                       </Text>
 
                       <Pressable
@@ -1145,6 +1230,10 @@ const styles = StyleSheet.create({
     padding: 12,
     paddingBottom: 10,
     ...theme.shadow.glow,
+  },
+
+  analyticsSoloLinkCard: {
+    marginBottom: 12,
   },
 
   analyticsLinkCardPressed: {

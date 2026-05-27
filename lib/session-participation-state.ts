@@ -3,6 +3,7 @@ export type SessionMembershipBaseRow = {
   join_code: string
   created_at: string
   created_by: string
+  expected_player_count?: number | null
 }
 
 export type SessionParticipationScoreRow = {
@@ -21,10 +22,15 @@ export type SessionParticipationSummary = {
   created_at: string
   updated_at: string
   created_by: string
+  expected_player_count: number | null
   is_host: boolean
   player_count: number
   total_entries: number
   locked_count: number
+}
+
+export function mergeSessionIds(hostedSessionIds: string[], joinedSessionIds: string[]) {
+  return [...new Set([...hostedSessionIds, ...joinedSessionIds].filter(Boolean))]
 }
 
 export function buildSessionParticipationSummaries(input: {
@@ -74,6 +80,7 @@ export function buildSessionParticipationSummaries(input: {
 
       return {
         ...session,
+        expected_player_count: session.expected_player_count ?? null,
         updated_at: counts.updated_at ?? session.created_at,
         is_host: session.created_by === input.currentUserId,
         player_count: playerCountMap.get(session.id) ?? 1,
@@ -82,6 +89,16 @@ export function buildSessionParticipationSummaries(input: {
       }
     })
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+}
+
+export function sortActiveSessionSummaries(rows: SessionParticipationSummary[]) {
+  return [...rows].sort((left, right) => {
+    if (left.is_host !== right.is_host) {
+      return left.is_host ? -1 : 1
+    }
+
+    return right.updated_at.localeCompare(left.updated_at)
+  })
 }
 
 export function filterInProgressSessions(rows: SessionParticipationSummary[]) {

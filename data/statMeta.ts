@@ -37,19 +37,19 @@ export const statMeta: StatMetaItem[] = [
 
   {
     key: 'hammer',
-    label: 'Hammer',
+    label: 'Worker Symbol',
     section: 'equipment',
     icon: scoreIcons.hammer,
   },
   {
     key: 'helmet',
-    label: 'Helmet',
+    label: 'Solider Symbol',
     section: 'equipment',
     icon: scoreIcons.helmet,
   },
   {
     key: 'key',
-    label: 'Key',
+    label: 'Shadow Symbol',
     section: 'equipment',
     icon: scoreIcons.key,
   },

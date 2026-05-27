@@ -15,11 +15,11 @@ import { router, useLocalSearchParams } from 'expo-router'
 import { useFocusEffect } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as Haptics from 'expo-haptics'
+import { MaterialCommunityIcons } from '@expo/vector-icons'
 import { ScoreRow } from '../components/ScoreRow'
 import DukePicker from '../components/DukePicker'
 import { ScoreTotal } from '../components/ScoreTotal'
 import CountBadge from '../components/CountBadge'
-import ManageAccountModal from '../components/ManageAccountModal'
 import SessionContextStrip from '../components/SessionContextStrip'
 import { theme } from '../constants/theme'
 import { cards, type DukeCard, type StatKey } from '../data/cards'
@@ -39,6 +39,7 @@ import { getScoreSectionHeaderMeta } from '../lib/score-section-header'
 import {
   loadSessionLockState,
   loadMyExistingScore,
+  loadSessionScoreRevision,
   saveMyScore,
 } from '../lib/scores'
 import {
@@ -56,19 +57,12 @@ import {
 } from '../lib/score-screen-state'
 import { copyJoinCodeWithFeedback } from '../lib/copy-join-code-client'
 import {
-  buildManageAccountMenuActions,
-  manageAccountAlertCopy,
-  type ManageAccountModalAction,
-} from '../lib/manage-account-menu'
-import {
   buildScoreSaveFeedback,
   sessionUiCopy,
 } from '../lib/p3-feedback'
 import { buildBottomNavRoute } from '../lib/bottom-nav-route'
-import { getBottomNavTopClearance } from '../lib/bottom-nav-layout'
 import { performSafeBackNavigation } from '../lib/back-navigation'
 import { filterDukesByQuery } from '../lib/duke-search'
-import { logoutAndClearActiveSessionState } from '../lib/logout'
 import {
   shouldAutoRouteToVictoryOnLock,
   subscribeToSessionActivity,
@@ -82,6 +76,18 @@ import {
 import { supabase } from '../lib/supabase'
 import { buildVictoryRoute } from '../lib/victory-route'
 import { didAppBecomeActive } from '../lib/app-state-refresh'
+import {
+  getTrackedPreviousRoute,
+  markTrackedBackNavigation,
+} from '../lib/route-history'
+
+const portraitDukeSlugs = new Set([
+  'cornelius_the_dreamer',
+  'mulholland_the_brave',
+  'sir_gustavo_the_wrathborn',
+  'sir_roberts_of_stoneblood',
+  'tsoukalos_the_conspirator',
+])
 
 function getSectionAccent(title: string) {
   switch (title) {
@@ -173,13 +179,12 @@ export default function ScoreScreen() {
     routeSessionId || ''
   )
   const [saving, setSaving] = useState(false)
-  const [loggingOut, setLoggingOut] = useState(false)
-  const [accountMenuVisible, setAccountMenuVisible] = useState(false)
   const [resolvingSession, setResolvingSession] = useState(true)
   const [loadingExisting, setLoadingExisting] = useState(true)
   const [loadError, setLoadError] = useState<string>('')
   const [isLocked, setIsLocked] = useState(false)
   const [lastSavedAt, setLastSavedAt] = useState<string>('')
+  const [isSubmittedLock, setIsSubmittedLock] = useState(false)
   const [saveFeedback, setSaveFeedback] = useState<{
     title: string
     body: string
@@ -198,6 +203,7 @@ export default function ScoreScreen() {
     if (!selectedSlug) return null
     return dukeCards.find((card) => card.slug === selectedSlug) ?? null
   }, [dukeCards, selectedSlug])
+  const selectedDukeThumbIsPortrait = selectedDuke ? portraitDukeSlugs.has(selectedDuke.slug) : false
 
   const filteredDukeCards = useMemo(() => {
     return filterDukesByQuery(dukeCards, dukeQuery)
@@ -251,6 +257,7 @@ export default function ScoreScreen() {
   const isWorking = resolvingSession || loadingExisting || saving
   const isInteractionBlocked =
     isLocked ||
+    isSubmittedLock ||
     isWorking ||
     Boolean(loadError) ||
     !effectiveSessionId
@@ -315,7 +322,7 @@ export default function ScoreScreen() {
           guestEntryId: guestEntryId || null,
         })
 
-        const [existing, sessionLockState, storedDraft] = await Promise.all([
+        const [existing, sessionLockState, sessionScoreRevision, storedDraft] = await Promise.all([
           loadMyExistingScore(nextSessionId, {
             guestMode: isGuestMode,
             guestProfileId: guestProfileId || null,
@@ -323,6 +330,7 @@ export default function ScoreScreen() {
             addedUserId: isAddedPlayerMode ? addedUserId : null,
           }),
           loadSessionLockState(nextSessionId),
+          loadSessionScoreRevision(nextSessionId),
           nextDraftStorageKey
             ? AsyncStorage.getItem(nextDraftStorageKey)
             : Promise.resolve(null),
@@ -341,6 +349,9 @@ export default function ScoreScreen() {
               inputs: normalizeScoreInputs(existing.inputs),
               updatedAt: existing.updated_at || '',
               isLocked: Boolean(existing.game_locked),
+              confirmedForCurrentRevision:
+                Boolean(existing.game_locked) ||
+                Number(existing.confirmed_revision ?? 0) === sessionScoreRevision,
             }
           : null
         const resolvedState = resolveLoadedScoreState({
@@ -359,6 +370,7 @@ export default function ScoreScreen() {
         setBaselineInputs(resolvedState.baselineInputs)
         setLastSavedAt(resolvedState.lastSavedAt)
         setIsLocked(resolvedState.isLocked)
+        setIsSubmittedLock(Boolean(resolvedState.lastSavedAt) && !resolvedState.isLocked)
 
         if (nextDraftStorageKey && (normalizedExisting || resolvedState.isLocked)) {
           void AsyncStorage.removeItem(nextDraftStorageKey).catch((error) => {
@@ -590,21 +602,21 @@ export default function ScoreScreen() {
       return
     }
 
-      Alert.alert(
-        'Discard unsaved changes?',
-        'You have changes on this screen that have not been saved yet.',
-        [
-          { text: 'Stay', style: 'cancel' },
-          {
-            text: 'Leave',
-            style: 'destructive',
-            onPress: () => {
-              void clearScoreDraft().finally(action)
-            },
+    Alert.alert(
+      'Discard unsaved changes?',
+      'You have changes on this screen that have not been saved yet.',
+      [
+        { text: 'Stay', style: 'cancel' },
+        {
+          text: 'Leave',
+          style: 'destructive',
+          onPress: () => {
+            void clearScoreDraft().finally(action)
           },
-        ]
-      )
-    }
+        },
+      ]
+    )
+  }
 
   function openCompare(replace = false) {
     if (!effectiveSessionId) {
@@ -688,62 +700,15 @@ export default function ScoreScreen() {
     ? `Saved ${new Date(lastSavedAt).toLocaleDateString()}`
     : 'Unsaved'
 
-  async function handleLogout() {
-    try {
-      setLoggingOut(true)
-      await logoutAndClearActiveSessionState({
-        signOut: () => supabase.auth.signOut(),
-        clearActiveSessionState,
-      })
-      router.replace('/')
-    } catch (err: any) {
-      Alert.alert('Logout failed', err?.message ?? 'Unknown error')
-    } finally {
-      setLoggingOut(false)
-    }
-  }
-
-  const accountMenuActions: ManageAccountModalAction[] = buildManageAccountMenuActions().map(
-    (action) => {
-      switch (action.id) {
-        case 'manageData':
-          return {
-            ...action,
-            onPress: () => confirmLeaveIfNeeded(() => router.push('/manage-data')),
-          }
-        case 'newSession':
-          return {
-            ...action,
-            onPress: () =>
-              confirmLeaveIfNeeded(() => router.replace('/create-session')),
-          }
-        case 'logout':
-          return {
-            ...action,
-            onPress: () => confirmLeaveIfNeeded(() => void handleLogout()),
-          }
-        case 'deleteSession':
-          return {
-            ...action,
-          }
-        case 'cancel':
-          return { ...action }
-        default:
-          return action
-      }
-    }
-  )
-
-  const openAccountActions = useCallback(() => {
-    setAccountMenuVisible(true)
-  }, [])
   const handleBackNavigation = useCallback(() => {
     performSafeBackNavigation({
       canGoBack: router.canGoBack(),
+      previousHref: getTrackedPreviousRoute(),
       back: () => router.back(),
+      markBackNavigation: markTrackedBackNavigation,
       replace: (href) => router.replace(href),
     })
-  }, [])
+  }, [router])
 
   function confirmReset() {
     if (isLocked) {
@@ -914,6 +879,7 @@ export default function ScoreScreen() {
       const now = new Date().toISOString()
         setIsLocked(false)
         setLastSavedAt(now)
+        setIsSubmittedLock(true)
         setBaselineSlug(selectedDuke.slug)
         setBaselineInputs(inputs)
         void clearScoreDraft()
@@ -995,7 +961,6 @@ export default function ScoreScreen() {
         contentContainerStyle={[
           styles.content,
           {
-            paddingTop: getBottomNavTopClearance(insets.top, 'score'),
             paddingBottom: insets.bottom + 24,
           },
         ]}
@@ -1141,6 +1106,17 @@ export default function ScoreScreen() {
         </View>
       ) : null}
 
+      {!isLocked && isSubmittedLock ? (
+        <View style={styles.submittedLockCard}>
+          <MaterialCommunityIcons
+            name="lock-check-outline"
+            size={20}
+            color={theme.colors.accent}
+          />
+          <Text style={styles.submittedLockText}>Score submitted</Text>
+        </View>
+      ) : null}
+
       <View
         pointerEvents={isInteractionBlocked ? 'none' : 'auto'}
         style={isInteractionBlocked ? styles.lockedBlock : undefined}
@@ -1188,12 +1164,17 @@ export default function ScoreScreen() {
             </Text>
 
             <View style={styles.selectedDukeTop}>
-              <View style={styles.dukeThumbWrap}>
+              <View
+                style={[
+                  styles.dukeThumbWrap,
+                  selectedDukeThumbIsPortrait && styles.dukeThumbWrapPortrait,
+                ]}
+              >
                 {cardImages[selectedDuke.slug] ? (
                   <Image
                     source={cardImages[selectedDuke.slug]}
                     style={styles.dukeThumb}
-                    resizeMode="cover"
+                    resizeMode={selectedDukeThumbIsPortrait ? 'contain' : 'cover'}
                   />
                 ) : (
                   <View style={styles.noImageState}>
@@ -1325,6 +1306,24 @@ export default function ScoreScreen() {
           </Text>
         </Pressable>
 
+        {isSubmittedLock && !isLocked ? (
+          <>
+            <Text style={styles.footerLinkSeparator}>·</Text>
+            <Pressable
+              style={({ pressed }) => [pressed && styles.buttonPressed]}
+              onPress={() => {
+                setIsSubmittedLock(false)
+                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+              }}
+              hitSlop={6}
+            >
+              <Text style={styles.footerLinkUnlock}>
+                Unlock
+              </Text>
+            </Pressable>
+          </>
+        ) : null}
+
         <Text style={styles.footerLinkSeparator}>·</Text>
 
         <Pressable
@@ -1344,14 +1343,6 @@ export default function ScoreScreen() {
         </Pressable>
       </View>
       </ScrollView>
-
-      <ManageAccountModal
-        visible={accountMenuVisible}
-        title={manageAccountAlertCopy.title}
-        message={manageAccountAlertCopy.message}
-        actions={accountMenuActions}
-        onRequestClose={() => setAccountMenuVisible(false)}
-      />
     </>
   )
 }
@@ -1738,6 +1729,11 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
 
+  dukeThumbWrapPortrait: {
+    width: 108,
+    height: 151,
+  },
+
   // Live total inlined beside the duke name — no separate Live Total pill.
   selectedNameRow: {
     flexDirection: 'row',
@@ -1889,6 +1885,33 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     textAlign: 'center',
+  },
+
+  submittedLockCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(109, 90, 230, 0.08)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(109, 90, 230, 0.25)',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+  },
+
+  submittedLockText: {
+    color: theme.colors.accent,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+
+  footerLinkUnlock: {
+    color: theme.colors.accent,
+    fontSize: 12,
+    fontWeight: '800',
+    textDecorationLine: 'underline',
   },
 
   // Demoted Clear / Back as small text links beneath the primary action.

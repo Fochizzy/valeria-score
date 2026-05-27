@@ -22,6 +22,7 @@ type BuildScoreSavePayloadInput = {
   addedPlayerName?: string | null
   lockScore?: boolean
   includedInStats?: boolean
+  confirmedRevision?: number | null
   updatedAt?: string
 }
 
@@ -34,6 +35,10 @@ export function buildScoreSavePayload(input: BuildScoreSavePayloadInput) {
     game_locked: Boolean(input.lockScore),
     included_in_stats: Boolean(input.includedInStats),
     updated_at: input.updatedAt ?? new Date().toISOString(),
+  }
+
+  if (Number.isFinite(input.confirmedRevision) && Number(input.confirmedRevision) > 0) {
+    payload.confirmed_revision = Number(input.confirmedRevision)
   }
 
   if (typeof input.scoredByUserId === 'string' && input.scoredByUserId) {

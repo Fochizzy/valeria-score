@@ -14,6 +14,7 @@ type SessionRow = {
   created_by: string
   join_code: string | null
   expected_player_count: number | null
+  score_revision: number | null
 }
 
 type ScoreQueryResult = {
@@ -31,17 +32,18 @@ export type CompareDashboardData = {
   isCreator: boolean
   sessionCreatorId: string
   expectedPlayerCount: number
+  scoreRevision: number
   loadNotice: string
   scores: CompareEntry[]
 }
 
 const FULL_SCORE_SELECT =
-  'id, session_id, owner_user_id, scored_by_user_id, player_name, guest_profile_id, guest_entry_id, recap_player_name, recap_player_id, duke_slug, score_total, game_locked, placement, is_winner'
+  'id, session_id, owner_user_id, scored_by_user_id, player_name, guest_profile_id, guest_entry_id, recap_player_name, recap_player_id, duke_slug, score_total, game_locked, confirmed_revision, placement, is_winner'
 
 const LEGACY_SCORE_SELECT =
   'id, session_id, owner_user_id, scored_by_user_id, player_name, guest_profile_id, guest_entry_id, duke_slug, score_total, game_locked'
 
-const FULL_SESSION_SELECT = 'id, created_by, join_code, expected_player_count'
+const FULL_SESSION_SELECT = 'id, created_by, join_code, expected_player_count, score_revision'
 
 const LEGACY_SESSION_SELECT = 'id, created_by, join_code'
 
@@ -56,6 +58,7 @@ function buildCompareProgressEntries(entries: CompareEntry[]) {
     locked: entry.locked,
     userId: entry.userId,
     hasScore: entry.hasScore,
+    confirmedForCurrentRevision: entry.confirmedForCurrentRevision,
   }))
 }
 
@@ -67,10 +70,12 @@ function isMissingRankingColumnError(error: { message?: string | null }) {
     message.includes('session_scores.is_winner') ||
     message.includes('session_scores.recap_player_name') ||
     message.includes('session_scores.recap_player_id') ||
+    message.includes('session_scores.confirmed_revision') ||
     message.includes('column placement does not exist') ||
     message.includes('column is_winner does not exist') ||
     message.includes('column recap_player_name does not exist') ||
-    message.includes('column recap_player_id does not exist')
+    message.includes('column recap_player_id does not exist') ||
+    message.includes('column confirmed_revision does not exist')
   )
 }
 
@@ -97,17 +102,17 @@ async function loadSessionScoreRows(sessionId: string): Promise<ScoreQueryResult
   if (legacyError) throw legacyError
 
   const legacyRows = (
-    (legacyData ?? []) as Omit<CompareScoreRow, 'placement' | 'is_winner'>[]
+    (legacyData ?? []) as Omit<CompareScoreRow, 'confirmed_revision' | 'placement' | 'is_winner'>[]
   ).map((row) => ({
     ...row,
+    confirmed_revision: 1,
     placement: null,
     is_winner: null,
   }))
 
   return {
     rows: legacyRows,
-    notice:
-      'Live totals only — final placements unlock once everyone saves.',
+    notice: 'Live totals only - final placements unlock once everyone saves.',
   }
 }
 
@@ -116,7 +121,9 @@ function isMissingExpectedPlayerCountError(error: { message?: string | null }) {
 
   return (
     message.includes('expected_player_count') ||
-    message.includes('column expected_player_count does not exist')
+    message.includes('column expected_player_count does not exist') ||
+    message.includes('score_revision') ||
+    message.includes('column score_revision does not exist')
   )
 }
 
@@ -158,6 +165,7 @@ async function loadCompareSessionRow(sessionId: string): Promise<SessionQueryRes
       ? ({
           ...(legacyData as Omit<SessionRow, 'expected_player_count'>),
           expected_player_count: null,
+          score_revision: 1,
         } as SessionRow)
       : null,
     notice:
@@ -235,6 +243,7 @@ export async function loadCompareDashboardData(
   ])
 
   const scores = buildCompareEntries({
+    sessionScoreRevision: Number(safeSession?.score_revision ?? 1),
     scoreRows: safeScores,
     sessionPlayers: safePlayers,
     profiles,
@@ -251,6 +260,7 @@ export async function loadCompareDashboardData(
     isCreator: Boolean(user?.id && safeSession?.created_by === user.id),
     sessionCreatorId: safeSession?.created_by ?? '',
     expectedPlayerCount: progress.totalParticipants,
+    scoreRevision: Number(safeSession?.score_revision ?? 1),
     loadNotice: mergeNotices(scoreResponse.notice, sessionResponse.notice),
     scores,
   }

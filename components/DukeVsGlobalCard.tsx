@@ -33,7 +33,7 @@ export default function DukeVsGlobalCard({ rows }: Props) {
 
       {rows.length === 0 ? (
         <Text style={styles.empty}>
-          Play a few locked games with a duke to compare your numbers against everyone else's.
+          Play a few locked games with a duke to compare your numbers against everyone else&apos;s.
         </Text>
       ) : null}
 

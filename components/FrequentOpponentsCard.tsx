@@ -9,6 +9,8 @@ type Props = {
   loading?: boolean
   onSelect: (playerKey: string) => void
   onLongPress?: (playerKey: string) => void
+  title?: string
+  hintText?: string | null
 }
 
 export default function FrequentOpponentsCard({
@@ -16,20 +18,22 @@ export default function FrequentOpponentsCard({
   loading,
   onSelect,
   onLongPress,
+  title,
+  hintText,
 }: Props) {
   return (
     <View style={styles.card}>
       <View style={styles.headerRow}>
         <View style={styles.headerText}>
           <Text style={styles.kicker}>Frequent Opponents</Text>
-          <Text style={styles.title}>Players You Face Most</Text>
+          <Text style={styles.title}>{title ?? 'Players You Face Most'}</Text>
         </View>
         {loading ? <ActivityIndicator color={theme.colors.accent} /> : null}
       </View>
 
       {opponents.length === 0 && !loading ? (
         <Text style={styles.empty}>
-          Lock a tracked game with another player to start filling out your most-faced list.
+          Lock a finalized game with another player to start filling out your most-faced list.
         </Text>
       ) : null}
 
@@ -91,8 +95,10 @@ export default function FrequentOpponentsCard({
         ))}
       </View>
 
-      {opponents.length > 0 ? (
-        <Text style={styles.hint}>Press and hold a player to jump to their stats.</Text>
+      {opponents.length > 0 && hintText !== null ? (
+        <Text style={styles.hint}>
+          {hintText ?? 'Press and hold a player to jump to their stats.'}
+        </Text>
       ) : null}
     </View>
   )

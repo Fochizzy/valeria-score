@@ -107,12 +107,12 @@ export function buildProfilePlainLanguageInsights({
   if (!history.length) {
     return [
       {
-        title: 'Tracked Games',
-        body: 'You have no locked games yet, so this page will fill in once your first score is saved.',
+          title: 'Finalized Games',
+          body: 'You have no finalized games yet, so this page will fill in once your first locked score is saved.',
       },
       {
         title: 'Favorite Duke',
-        body: 'A few tracked sessions will make it clear which duke you keep coming back to.',
+          body: 'A few finalized sessions will make it clear which duke you keep coming back to.',
       },
       {
         title: 'Recent Form',
@@ -148,8 +148,8 @@ export function buildProfilePlainLanguageInsights({
       title: 'Overall Pace',
       body:
         safeGames === 1
-          ? `You have 1 tracked game so far, and it finished at ${safeAverageScore.toFixed(1)} PTS.`
-          : `Across ${safeGames} tracked games, you average ${safeAverageScore.toFixed(1)} PTS and win ${winRate.toFixed(1)}% of the time.`,
+            ? `You have 1 finalized game so far, and it finished at ${safeAverageScore.toFixed(1)} PTS.`
+            : `Across ${safeGames} finalized games, you average ${safeAverageScore.toFixed(1)} PTS and win ${winRate.toFixed(1)}% of the time.`,
     },
     {
       title: 'Best Run',
@@ -158,7 +158,7 @@ export function buildProfilePlainLanguageInsights({
     },
     {
       title: 'Favorite Duke',
-      body: `You keep coming back to ${formatDukeName(favoriteDukeSlug, { emptyLabel: 'No Duke' })}; it shows up in ${favoriteDukeCount} of ${safeGames} tracked games.`,
+      body: `You keep coming back to ${formatDukeName(favoriteDukeSlug, { emptyLabel: 'No Duke' })}; it shows up in ${favoriteDukeCount} of ${safeGames} finalized games.`,
     },
     {
       title: safeGames > 1 ? 'Table Pattern' : 'Latest Table',

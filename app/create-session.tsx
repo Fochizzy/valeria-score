@@ -17,7 +17,6 @@ import { logoutAndClearActiveSessionState } from '../lib/logout'
 import { supabase } from '../lib/supabase'
 import { Alert } from '../lib/themed-alert'
 import ValeriaHeader from '../components/ValeriaHeader'
-import CountBadge from '../components/CountBadge'
 import {
   createGameSession,
   deleteInProgressSession,
@@ -32,19 +31,32 @@ import {
   setActiveSessionId,
 } from '../lib/sessions'
 import { theme } from '../constants/theme'
+import {
+  clampExpectedPlayerCount,
+  EXPECTED_PLAYER_OPTIONS,
+  isExpectedPlayerOption,
+  type ExpectedPlayerOption,
+} from '../lib/expected-player-count'
 
 const citizenBackdrop = require('../assets/Citizen Backdrop.png')
+
 const pageSurface = {
   panel: 'rgba(25, 18, 43, 0.68)',
   panelAlt: 'rgba(31, 22, 52, 0.7)',
-  panelRaised: 'rgba(38, 27, 63, 0.74)',
+  panelRaised: 'rgba(38, 27, 63, 0.76)',
+  panelSoft: 'rgba(40, 31, 66, 0.58)',
   inset: 'rgba(18, 24, 43, 0.66)',
 }
-const SESSION_SHORTCUTS = [
+
+const GAME_HUB_LINKS: readonly {
+  label: string
+  route: '/player-stats' | '/duke-stats' | '/manage-data' | '/solo-stats'
+}[] = [
   { label: 'Player Stats', route: '/player-stats' as const },
   { label: 'Duke Stats', route: '/duke-stats' as const },
-  { label: 'Profile', route: '/profile' as const },
-]
+  { label: 'Recent Recaps', route: '/manage-data' as const },
+  { label: 'Solo Stats', route: '/solo-stats' as const },
+] as const
 
 function formatDate(value: string) {
   const date = new Date(value)
@@ -57,12 +69,29 @@ function formatDate(value: string) {
   })
 }
 
+function getExpectedPlayerCount(session: InProgressSession) {
+  return clampExpectedPlayerCount(
+    session.expected_player_count ?? Math.max(session.player_count, session.total_entries, 2)
+  )
+}
+
+function getJoinedSeatCount(session: InProgressSession) {
+  return Math.min(getExpectedPlayerCount(session), Math.max(session.player_count, session.total_entries))
+}
+
+function getSavedSeatCount(session: InProgressSession) {
+  return Math.min(getExpectedPlayerCount(session), Math.max(0, session.locked_count))
+}
+
 export default function CreateSessionScreen() {
   const [creating, setCreating] = useState(false)
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [sessions, setSessions] = useState<InProgressSession[]>([])
   const [deletingId, setDeletingId] = useState('')
+  const [savingExpectedFor, setSavingExpectedFor] = useState('')
+  const [pendingExpectedPlayers, setPendingExpectedPlayers] =
+    useState<ExpectedPlayerOption | null>(null)
   const [loggingOut, setLoggingOut] = useState(false)
   const didFocusRefreshRef = useRef(false)
 
@@ -124,7 +153,7 @@ export default function CreateSessionScreen() {
     await copyJoinCodeWithFeedback(joinCode)
   }, [])
 
-  function handleShortcutPress(route: (typeof SESSION_SHORTCUTS)[number]['route']) {
+  function handleRoutePress(route: (typeof GAME_HUB_LINKS)[number]['route'] | '/profile') {
     router.push(route)
   }
 
@@ -132,10 +161,22 @@ export default function CreateSessionScreen() {
     event.stopPropagation()
   }
 
+  function handleOpenSoloMode() {
+    router.push('/solo-score')
+  }
+
   async function handleCreateSession() {
+    if (!isExpectedPlayerOption(pendingExpectedPlayers)) {
+      Alert.alert(
+        'Choose expected players',
+        'Select how many players are expected before starting the game.'
+      )
+      return
+    }
+
     try {
       setCreating(true)
-      const { session } = await createGameSession()
+      const { session } = await createGameSession(pendingExpectedPlayers)
 
       await setActiveSessionId(String(session.id))
       await setActiveJoinCode(String(session.join_code))
@@ -148,7 +189,7 @@ export default function CreateSessionScreen() {
         },
       })
     } catch (err: any) {
-      Alert.alert('Create session failed', err?.message ?? 'Unknown error')
+      Alert.alert('Create game failed', err?.message ?? 'Unknown error')
     } finally {
       setCreating(false)
     }
@@ -173,10 +214,10 @@ export default function CreateSessionScreen() {
 
   function handleDeleteSession(session: InProgressSession) {
     Alert.alert(
-      session.is_host ? 'Delete session?' : 'Leave session?',
+      session.is_host ? 'Delete table?' : 'Leave table?',
       session.is_host
-        ? 'This removes the session if it has no locked scores yet.'
-        : 'This removes your unfinished participation from the session.',
+        ? 'This removes the table if it has no locked scores yet.'
+        : 'This removes your unfinished participation from the table.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -205,6 +246,80 @@ export default function CreateSessionScreen() {
     )
   }
 
+  const updateExpectedPlayers = useCallback(
+    async (session: InProgressSession, nextCount: number) => {
+      if (!session.is_host) {
+        Alert.alert('Host only', 'Only the session creator can set the table size.')
+        return
+      }
+
+      const safeNextCount = clampExpectedPlayerCount(nextCount)
+      if (safeNextCount === getExpectedPlayerCount(session)) {
+        return
+      }
+
+      const previousCount = session.expected_player_count
+
+      try {
+        setSavingExpectedFor(session.id)
+        setSessions((current) =>
+          current.map((item) =>
+            item.id === session.id ? { ...item, expected_player_count: safeNextCount } : item
+          )
+        )
+
+        const { data, error } = await supabase
+          .from('game_sessions')
+          .update({ expected_player_count: safeNextCount })
+          .eq('id', session.id)
+          .eq('created_by', session.created_by)
+          .select('expected_player_count')
+          .maybeSingle()
+
+        if (error) throw error
+        if (!data) {
+          throw new Error('The table size could not be updated.')
+        }
+
+        const confirmedCount = clampExpectedPlayerCount(data.expected_player_count)
+        setSessions((current) =>
+          current.map((item) =>
+            item.id === session.id ? { ...item, expected_player_count: confirmedCount } : item
+          )
+        )
+      } catch (err: any) {
+        setSessions((current) =>
+          current.map((item) =>
+            item.id === session.id ? { ...item, expected_player_count: previousCount } : item
+          )
+        )
+        Alert.alert(
+          'Unable to update players',
+          err?.message ?? 'Please try updating the table size again.'
+        )
+      } finally {
+        setSavingExpectedFor('')
+      }
+    },
+    []
+  )
+
+  const featuredSession = sessions[0] ?? null
+  const additionalSessions = sessions.slice(1)
+  const canCreateGame = isExpectedPlayerOption(pendingExpectedPlayers) && !creating
+
+  const featuredMeta = featuredSession
+    ? buildSessionCardMeta({
+        playerCount: featuredSession.player_count,
+        totalEntries: featuredSession.total_entries,
+        lockedCount: featuredSession.locked_count,
+      })
+    : null
+
+  const featuredExpectedCount = featuredSession ? getExpectedPlayerCount(featuredSession) : 2
+  const featuredJoinedCount = featuredSession ? getJoinedSeatCount(featuredSession) : 0
+  const featuredSavedCount = featuredSession ? getSavedSeatCount(featuredSession) : 0
+
   return (
     <ImageBackground
       source={citizenBackdrop}
@@ -225,101 +340,305 @@ export default function CreateSessionScreen() {
           }
           showsVerticalScrollIndicator={false}
         >
-          <ValeriaHeader
-            compact
-            title="Game Sessions"
-            subtitle="Create, resume, or leave an active table"
-            rightLabel={loggingOut ? 'Logging Out...' : 'Logout'}
-            onRightPress={handleLogout}
-            rightDisabled={loggingOut}
-          />
-
-          <View style={styles.heroCard}>
-            <View style={styles.heroContent}>
-              <Text style={styles.kicker}>Valeria Score</Text>
-              <Text style={styles.heroTitle}>Start or Resume</Text>
-              <Text style={styles.subtitle}>
-                Start a new table or jump back into any game you are currently part of.
-              </Text>
-
-              <View style={styles.heroButtons}>
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.primaryButton,
-                    pressed && styles.pressed,
-                    creating && styles.disabled,
-                  ]}
-                  onPress={handleCreateSession}
-                  disabled={creating}
-                >
-                  <Text style={styles.primaryButtonText}>
-                    {creating ? 'Creating...' : 'New Session'}
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.secondaryButton,
-                    pressed && styles.pressed,
-                  ]}
-                  onPress={() => router.push('/join-game')}
-                >
-                  <Text style={styles.secondaryButtonText}>Join Game</Text>
-                </Pressable>
-              </View>
-
-              <View style={styles.quickLinksSection}>
-                <Text style={styles.quickLinksLabel}>Quick Links</Text>
-
-                <View style={styles.quickLinksGrid}>
-                  {SESSION_SHORTCUTS.map((shortcut) => (
-                    <Pressable
-                      key={shortcut.route}
-                      style={({ pressed }) => [
-                        styles.quickLinkButton,
-                        shortcut.route === '/profile' && styles.quickLinkButtonWide,
-                        pressed && styles.pressed,
-                      ]}
-                      onPress={() => handleShortcutPress(shortcut.route)}
-                    >
-                      <Text style={styles.quickLinkButtonText}>{shortcut.label}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
+          <View style={styles.headerRow}>
+            <View style={styles.headerRowCopy}>
+              <ValeriaHeader
+                compact
+                title="Game Hub"
+                subtitle="Create, join, resume, or leave an active table"
+              />
             </View>
+            <Pressable
+              style={({ pressed }) => [
+                styles.logoutButton,
+                pressed && styles.pressed,
+                loggingOut && styles.disabled,
+              ]}
+              onPress={handleLogout}
+              disabled={loggingOut}
+            >
+              <Text style={styles.logoutButtonText}>
+                {loggingOut ? 'Logging Out...' : 'Logout'}
+              </Text>
+            </Pressable>
           </View>
 
-          <View style={styles.sectionCard}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>In Progress</Text>
-              <CountBadge value={sessions.length} />
+          <View style={styles.quickActionGrid}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.quickActionCard,
+                styles.quickActionCardPrimary,
+                pressed && styles.pressed,
+                !canCreateGame && styles.disabled,
+              ]}
+              onPress={handleCreateSession}
+              disabled={!canCreateGame}
+            >
+              <Text style={styles.quickActionTitle}>{creating ? 'Creating...' : 'Create Game'}</Text>
+              <Text style={styles.quickActionBody}>
+                {isExpectedPlayerOption(pendingExpectedPlayers)
+                  ? `New ${pendingExpectedPlayers}-player table as host.`
+                  : 'Select players below first.'}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [styles.quickActionCard, pressed && styles.pressed]}
+              onPress={() => router.push('/join-game')}
+            >
+              <Text style={styles.quickActionTitle}>Join Game</Text>
+              <Text style={styles.quickActionBody}>
+                Enter with a join code.
+              </Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.preStartCard}>
+            <Text style={styles.sectionCaption}>Before You Start</Text>
+            <Text style={styles.preStartTitle}>Expected Players</Text>
+            <Text style={styles.preStartBody}>
+              {isExpectedPlayerOption(pendingExpectedPlayers)
+                ? `${pendingExpectedPlayers} players expected, including guests.`
+                : 'How many players, including guests?'}
+            </Text>
+
+            <View style={styles.expectedRow}>
+              {EXPECTED_PLAYER_OPTIONS.map((count) => {
+                const active = count === pendingExpectedPlayers
+
+                return (
+                  <Pressable
+                    key={count}
+                    style={({ pressed }) => [
+                      styles.expectedChip,
+                      active && styles.expectedChipActive,
+                      pressed && styles.pressed,
+                    ]}
+                    onPress={() => setPendingExpectedPlayers(count)}
+                  >
+                    <Text style={[styles.expectedChipText, active && styles.expectedChipTextActive]}>
+                      {count}
+                    </Text>
+                  </Pressable>
+                )
+              })}
             </View>
 
+            <Pressable
+              style={({ pressed }) => [
+                styles.soloModeButton,
+                pressed && styles.pressed,
+              ]}
+              onPress={handleOpenSoloMode}
+            >
+              <Text style={styles.soloModeButtonText}>Solo Mode</Text>
+            </Pressable>
+          </View>
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.quickActionCard,
+              styles.quickActionCardWide,
+              styles.resumeActionCard,
+              pressed && featuredSession && styles.pressed,
+              !featuredSession && styles.disabled,
+            ]}
+            onPress={() => {
+              if (featuredSession) {
+                void handleResumeSession(featuredSession)
+              }
+            }}
+            disabled={!featuredSession}
+          >
+            <Text style={styles.quickActionTitle}>Resume Active Table</Text>
+            <Text style={styles.quickActionBody}>
+              {featuredSession
+                ? 'Continue scoring where you left off.'
+                : 'Appears when you create or join a table.'}
+            </Text>
+          </Pressable>
+
+          <View style={styles.currentTableCard}>
             {loadingSessions ? (
               <View style={styles.loadingWrap}>
                 <ActivityIndicator color={theme.colors.accent} />
-                <Text style={styles.loadingText}>Loading your games...</Text>
+                <Text style={styles.loadingText}>Loading your tables...</Text>
               </View>
-            ) : sessions.length === 0 ? (
-              <View style={styles.emptyCard}>
-                <Text style={styles.emptyTitle}>No active sessions</Text>
-                <Text style={styles.emptyText}>
-                  Create a new session to start scoring.
-                </Text>
+            ) : featuredSession ? (
+              <>
+                <View style={styles.currentTableTop}>
+                  <View style={styles.currentTableHeaderRow}>
+                    <View style={styles.currentTableCopy}>
+                      <Text style={styles.sectionCaption}>Current Table</Text>
+                      <Text style={styles.currentTableTitle}>
+                        {featuredSession.is_host ? 'Your Active Table' : 'Joined Table'}
+                      </Text>
+                    </View>
 
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.emptyButton,
-                    pressed && styles.pressed,
-                  ]}
-                  onPress={handleCreateSession}
-                >
-                  <Text style={styles.emptyButtonText}>Start New Session</Text>
-                </Pressable>
-              </View>
+                    <View
+                      style={[
+                        styles.statePill,
+                        featuredMeta?.isReadyToFinish
+                          ? styles.statePillReady
+                          : featuredSession.total_entries > 0
+                          ? styles.statePillActive
+                          : styles.statePillWaiting,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.statePillText,
+                          featuredMeta?.isReadyToFinish
+                            ? styles.statePillReadyText
+                            : featuredSession.total_entries > 0
+                            ? styles.statePillActiveText
+                            : styles.statePillWaitingText,
+                        ]}
+                      >
+                        {featuredMeta?.statusValue ?? 'Waiting'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.currentTableMetaRow}>
+                    {featuredSession.is_host ? (
+                      <View style={styles.currentTableMetaCopyHost}>
+                        <Text
+                          style={[
+                            styles.currentTableText,
+                            styles.currentTableMetaText,
+                            styles.currentTableMetaTextHost,
+                          ]}
+                        >
+                          {'Host sees every seat,\nincluding guests.'}
+                        </Text>
+                      </View>
+                    ) : (
+                      <Text style={[styles.currentTableText, styles.currentTableMetaText]}>
+                        The host controls the table size and final expected seat count.
+                      </Text>
+                    )}
+
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.joinCodeInlineChip,
+                        pressed && styles.pressed,
+                        !featuredSession.join_code && styles.disabled,
+                      ]}
+                      onPress={() => void handleCopyJoinCode(featuredSession.join_code)}
+                      disabled={!featuredSession.join_code}
+                    >
+                      <Text style={styles.joinCodeInlineLabel}>Join Code</Text>
+                      <Text style={styles.joinCodeInlineValue}>
+                        {featuredSession.join_code || 'No Code'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
+
+                <View style={styles.ribbonRow}>
+                  <View style={styles.infoRibbon}>
+                    <Text style={styles.ribbonStrong}>
+                      {featuredJoinedCount} / {featuredExpectedCount} joined
+                    </Text>
+                    <Text style={styles.ribbonBody}>
+                      Saved scores: {featuredSavedCount} / {featuredExpectedCount}. End Game stays
+                      gated until every expected seat has a score.
+                    </Text>
+                  </View>
+
+                  <View style={styles.infoRibbon}>
+                    <Text style={styles.ribbonStrong}>Expected Players</Text>
+                    <Text style={styles.ribbonBody}>
+                      {featuredSession.is_host
+                        ? 'Host locks the table size here.'
+                        : 'Host-owned setting shown here for reference.'}
+                    </Text>
+
+                    <View style={styles.expectedRow}>
+                      {EXPECTED_PLAYER_OPTIONS.map((count) => {
+                        const active = count === featuredExpectedCount
+                        const disabled =
+                          !featuredSession.is_host || savingExpectedFor === featuredSession.id
+
+                        return (
+                          <Pressable
+                            key={count}
+                            style={({ pressed }) => [
+                              styles.expectedChip,
+                              active && styles.expectedChipActive,
+                              disabled && styles.expectedChipDisabled,
+                              pressed && !disabled && styles.pressed,
+                            ]}
+                            onPress={() => void updateExpectedPlayers(featuredSession, count)}
+                            disabled={disabled}
+                          >
+                            <Text
+                              style={[
+                                styles.expectedChipText,
+                                active && styles.expectedChipTextActive,
+                              ]}
+                            >
+                              {count}
+                            </Text>
+                          </Pressable>
+                        )
+                      })}
+                    </View>
+                  </View>
+                </View>
+
+                <View style={styles.tableActionRow}>
+                  <Pressable
+                    style={({ pressed }) => [styles.tableActionButton, pressed && styles.pressed]}
+                    onPress={() => void handleResumeSession(featuredSession)}
+                  >
+                    <Text style={styles.tableActionButtonText}>Resume Table</Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.tableActionButton,
+                      styles.tableActionButtonDestructive,
+                      pressed && styles.pressed,
+                      deletingId === featuredSession.id && styles.disabled,
+                    ]}
+                    onPress={() => handleDeleteSession(featuredSession)}
+                    disabled={deletingId === featuredSession.id}
+                  >
+                    <Text style={styles.tableActionButtonText}>
+                      {deletingId === featuredSession.id
+                        ? featuredSession.is_host
+                          ? 'Deleting...'
+                          : 'Leaving...'
+                        : featuredSession.is_host
+                        ? 'Delete Table'
+                        : 'Leave Table'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </>
             ) : (
-              sessions.map((session) => {
+              <>
+                <Text style={styles.sectionCaption}>Current Table</Text>
+                <Text style={styles.currentTableTitle}>No active table</Text>
+                <Text style={styles.currentTableText}>
+                  Create a new game or join one with a 6-character message code.
+                </Text>
+              </>
+            )}
+          </View>
+
+          {additionalSessions.length ? (
+            <View style={styles.additionalSection}>
+              <View style={styles.sectionRow}>
+                <Text style={styles.sectionTitle}>Other Active Tables</Text>
+                <View style={styles.inlinePill}>
+                  <Text style={styles.inlinePillText}>{additionalSessions.length}</Text>
+                </View>
+              </View>
+
+              {additionalSessions.map((session) => {
                 const meta = buildSessionCardMeta({
                   playerCount: session.player_count,
                   totalEntries: session.total_entries,
@@ -329,54 +648,36 @@ export default function CreateSessionScreen() {
                 return (
                   <Pressable
                     key={session.id}
-                    style={({ pressed }) => [
-                      styles.sessionCard,
-                      pressed && styles.pressed,
-                    ]}
-                    onPress={() => handleResumeSession(session)}
+                    style={({ pressed }) => [styles.sessionRowCard, pressed && styles.pressed]}
+                    onPress={() => void handleResumeSession(session)}
                   >
-                    <View style={styles.sessionTop}>
-                      <View style={styles.sessionMeta}>
-                        <Pressable
-                          style={({ pressed }) => [
-                            styles.sessionCodeButton,
-                            pressed && styles.pressed,
-                            !session.join_code && styles.disabled,
-                          ]}
-                          onPress={(event) => {
-                            handleNestedPress(event)
-                            void handleCopyJoinCode(session.join_code)
-                          }}
-                          disabled={!session.join_code}
-                        >
-                          <Text style={styles.sessionCodeLabel}>Join Code</Text>
-                          <Text style={styles.sessionCode}>{session.join_code || 'No Code'}</Text>
-                        </Pressable>
-
-                        <Text style={styles.sessionTime}>Updated {formatDate(session.updated_at)}</Text>
-                        <Text style={styles.sessionRole}>
-                          {session.is_host ? 'Host' : 'Participant'}
+                    <View style={styles.sessionRowTop}>
+                      <View style={styles.sessionRowCopy}>
+                        <Text style={styles.sessionRowCode}>{session.join_code || 'No Code'}</Text>
+                        <Text style={styles.sessionRowMeta}>
+                          {session.is_host ? 'Host' : 'Participant'} • Updated{' '}
+                          {formatDate(session.updated_at)}
                         </Text>
                       </View>
 
                       <View
                         style={[
-                          styles.sessionPill,
+                          styles.statePill,
                           meta.isReadyToFinish
-                            ? styles.sessionPillReady
+                            ? styles.statePillReady
                             : session.total_entries > 0
-                            ? styles.sessionPillActive
-                            : styles.sessionPillWaiting,
+                            ? styles.statePillActive
+                            : styles.statePillWaiting,
                         ]}
                       >
                         <Text
                           style={[
-                            styles.sessionPillText,
+                            styles.statePillText,
                             meta.isReadyToFinish
-                              ? styles.sessionPillReadyText
+                              ? styles.statePillReadyText
                               : session.total_entries > 0
-                              ? styles.sessionPillActiveText
-                              : styles.sessionPillWaitingText,
+                              ? styles.statePillActiveText
+                              : styles.statePillWaitingText,
                           ]}
                         >
                           {meta.statusValue}
@@ -384,31 +685,21 @@ export default function CreateSessionScreen() {
                       </View>
                     </View>
 
-                    <View style={styles.sessionFactsRow}>
-                      <View style={styles.sessionFact}>
-                        <Text style={styles.sessionFactLabel}>Players</Text>
-                        <Text style={styles.sessionFactValue}>{meta.playersValue}</Text>
-                      </View>
-
-                      <View style={styles.sessionFact}>
-                        <Text style={styles.sessionFactLabel}>Saved</Text>
-                        <Text style={styles.sessionFactValue}>{meta.savedValue}</Text>
-                      </View>
+                    <View style={styles.sessionRowFacts}>
+                      <Text style={styles.sessionRowFact}>
+                        Players {getJoinedSeatCount(session)} / {getExpectedPlayerCount(session)}
+                      </Text>
+                      <Text style={styles.sessionRowFact}>
+                        Saved {getSavedSeatCount(session)} / {getExpectedPlayerCount(session)}
+                      </Text>
                     </View>
 
-                    <View style={styles.sessionFooter}>
-                      <View style={styles.sessionFooterCopy}>
-                        <Text style={styles.sessionFooterTitle}>Tap anywhere to resume</Text>
-                        <Text style={styles.sessionFooterText}>
-                          {session.is_host
-                            ? 'Jump back into scoring for this table.'
-                            : 'Jump back into scoring for this shared table.'}
-                        </Text>
-                      </View>
+                    <View style={styles.sessionRowFooter}>
+                      <Text style={styles.sessionRowFooterText}>Tap row to resume</Text>
 
                       <Pressable
                         style={({ pressed }) => [
-                          styles.deleteButton,
+                          styles.rowDeleteButton,
                           pressed && styles.pressed,
                           deletingId === session.id && styles.disabled,
                         ]}
@@ -418,7 +709,7 @@ export default function CreateSessionScreen() {
                         }}
                         disabled={deletingId === session.id}
                       >
-                        <Text style={styles.deleteButtonText}>
+                        <Text style={styles.rowDeleteButtonText}>
                           {deletingId === session.id
                             ? session.is_host
                               ? 'Deleting...'
@@ -431,8 +722,36 @@ export default function CreateSessionScreen() {
                     </View>
                   </Pressable>
                 )
-              })
-            )}
+              })}
+            </View>
+          ) : null}
+
+          <Pressable
+            style={({ pressed }) => [styles.profileRibbon, pressed && styles.pressed]}
+            onPress={() => handleRoutePress('/profile')}
+          >
+            <View style={styles.profileRibbonCopy}>
+              <Text style={styles.profileRibbonTitle}>Profile</Text>
+              <Text style={styles.profileRibbonBody}>
+                Recent recaps, personal history, and your player snapshot live here.
+              </Text>
+            </View>
+            <Text style={styles.profileRibbonCta}>Open Profile</Text>
+          </Pressable>
+
+          <View style={styles.routeLinkGrid}>
+            {GAME_HUB_LINKS.map((link) => (
+              <Pressable
+                key={link.route}
+                style={({ pressed }) => [
+                  styles.routeLinkButton,
+                  pressed && styles.pressed,
+                ]}
+                onPress={() => handleRoutePress(link.route)}
+              >
+                <Text style={styles.routeLinkButtonText}>{link.label}</Text>
+              </Pressable>
+            ))}
           </View>
         </ScrollView>
       </View>
@@ -461,12 +780,12 @@ const styles = StyleSheet.create({
   },
 
   content: {
-    padding: 10,
-    paddingTop: 4,
-    paddingBottom: theme.layout.floatingNavClearance,
+    padding: 6,
+    paddingTop: 2,
+    paddingBottom: 20,
   },
 
-  heroCard: {
+  currentTableCard: {
     backgroundColor: pageSurface.panel,
     borderRadius: theme.radius.xxl,
     borderWidth: 1,
@@ -476,12 +795,24 @@ const styles = StyleSheet.create({
     ...theme.shadow.card,
   },
 
-  heroContent: {
-    minHeight: 192,
-    justifyContent: 'flex-end',
+  currentTableTop: {
+    gap: 10,
+    marginBottom: 14,
   },
 
-  kicker: {
+  currentTableHeaderRow: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+
+  currentTableCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  sectionCaption: {
     color: theme.colors.primaryLight,
     fontSize: 11,
     fontWeight: '900',
@@ -490,121 +821,308 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
 
-  heroTitle: {
+  currentTableTitle: {
     color: theme.colors.text,
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: '900',
-    marginBottom: 8,
+    marginBottom: 6,
   },
 
-  subtitle: {
+  currentTableText: {
     color: theme.colors.textSecondary,
     fontSize: 13,
     lineHeight: 20,
     fontWeight: '700',
-    marginBottom: 14,
   },
 
-  heroButtons: {
+  currentTableMetaRow: {
+    width: '100%',
     flexDirection: 'row',
-    gap: 10,
+    alignItems: 'stretch',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 2,
   },
 
-  quickLinksSection: {
-    marginTop: 14,
-    paddingTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.borderSoft,
-    gap: 10,
+  currentTableMetaText: {
+    flex: 1,
+    minWidth: 0,
   },
 
-  quickLinksLabel: {
-    color: theme.colors.textMuted,
-    fontSize: 11,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
+  currentTableMetaCopyHost: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 56,
+    justifyContent: 'center',
   },
 
-  quickLinksGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+  currentTableMetaTextHost: {
+    lineHeight: 18,
   },
 
-  quickLinkButton: {
-    flexGrow: 1,
-    flexBasis: '48%',
-    minHeight: 52,
+  joinCodeInlineChip: {
+    marginLeft: 'auto',
     backgroundColor: pageSurface.inset,
     borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.borderSoft,
+    minWidth: 112,
+    minHeight: 56,
+    alignSelf: 'stretch',
+    justifyContent: 'center',
     paddingHorizontal: 10,
-    paddingVertical: 10,
+    paddingVertical: 8,
+  },
+
+  joinCodeInlineLabel: {
+    color: theme.colors.textMuted,
+    fontSize: 9,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+    marginBottom: 2,
+  },
+
+  joinCodeInlineValue: {
+    color: theme.colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+
+  ribbonRow: {
+    gap: 10,
+    marginBottom: 14,
+  },
+
+  infoRibbon: {
+    backgroundColor: pageSurface.panelSoft,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSoft,
+    padding: 12,
+  },
+
+  ribbonStrong: {
+    color: theme.colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+
+  ribbonBody: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+
+  expectedRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+  },
+
+  expectedChip: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: pageSurface.inset,
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  quickLinkButtonWide: {
-    flexBasis: '100%',
+  expectedChipActive: {
+    backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primaryLight,
   },
 
-  quickLinkButtonText: {
+  expectedChipDisabled: {
+    opacity: 0.72,
+  },
+
+  expectedChipText: {
+    color: theme.colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+
+  expectedChipTextActive: {
     color: theme.colors.text,
-    fontSize: 12,
-    fontWeight: '800',
+  },
+
+  soloModeButton: {
+    marginTop: 14,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    alignSelf: 'stretch',
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+
+  soloModeButtonText: {
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: '900',
     textAlign: 'center',
   },
 
-  primaryButton: {
+  tableActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+
+  tableActionButton: {
     flex: 1,
-    backgroundColor: theme.colors.primary,
-    borderRadius: theme.radius.lg,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...theme.shadow.glow,
-  },
-
-  primaryButtonText: {
-    color: theme.colors.text,
-    fontWeight: '900',
-    fontSize: 15,
-  },
-
-  secondaryButton: {
-    minWidth: 112,
+    minHeight: 52,
     backgroundColor: pageSurface.panelRaised,
     borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    paddingVertical: 15,
-    paddingHorizontal: 16,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
   },
 
-  secondaryButtonText: {
+  tableActionButtonDestructive: {
+    backgroundColor: 'rgba(77, 25, 38, 0.78)',
+    borderColor: 'rgba(255, 151, 178, 0.22)',
+  },
+
+  tableActionButtonText: {
     color: theme.colors.text,
-    fontWeight: '800',
     fontSize: 14,
+    fontWeight: '900',
+    textAlign: 'center',
   },
 
-  sectionCard: {
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+
+  headerRowCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  logoutButton: {
+    backgroundColor: pageSurface.panelRaised,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+  },
+
+  logoutButtonText: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+
+  quickActionGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 10,
+  },
+
+  quickActionCard: {
+    flexBasis: '48%',
+    flexGrow: 1,
+    minHeight: 86,
     backgroundColor: pageSurface.panelAlt,
     borderRadius: theme.radius.xl,
     borderWidth: 1,
     borderColor: theme.colors.border,
     padding: 14,
+    justifyContent: 'space-between',
     ...theme.shadow.card,
   },
 
-  sectionHeader: {
+  quickActionCardPrimary: {
+    backgroundColor: 'rgba(55, 36, 95, 0.82)',
+    borderColor: 'rgba(194, 170, 255, 0.24)',
+  },
+
+  quickActionCardWide: {
+    flexBasis: '100%',
+    minHeight: 76,
+  },
+
+  resumeActionCard: {
+    marginBottom: 12,
+  },
+
+  quickActionTitle: {
+    color: theme.colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+    marginBottom: 8,
+  },
+
+  quickActionBody: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+
+  preStartCard: {
+    backgroundColor: pageSurface.panelAlt,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 14,
+    marginBottom: 12,
+    ...theme.shadow.card,
+  },
+
+  preStartTitle: {
+    color: theme.colors.text,
+    fontSize: 18,
+    fontWeight: '900',
+    marginBottom: 6,
+  },
+
+  preStartBody: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+
+  additionalSection: {
+    backgroundColor: pageSurface.panelAlt,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 14,
+    marginBottom: 12,
+    ...theme.shadow.card,
+  },
+
+  sectionRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 14,
+    marginBottom: 12,
   },
 
   sectionTitle: {
@@ -613,10 +1131,213 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
 
+  inlinePill: {
+    minWidth: 30,
+    backgroundColor: 'rgba(139, 92, 246, 0.14)',
+    borderWidth: 1,
+    borderColor: theme.colors.borderAccent ?? theme.colors.accent,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    alignItems: 'center',
+  },
+
+  inlinePillText: {
+    color: theme.colors.accent,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+
+  sessionRowCard: {
+    backgroundColor: pageSurface.panelRaised,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 12,
+    marginBottom: 10,
+  },
+
+  sessionRowTop: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+
+  sessionRowCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  sessionRowCode: {
+    color: theme.colors.text,
+    fontSize: 20,
+    fontWeight: '900',
+    letterSpacing: 1,
+    marginBottom: 2,
+  },
+
+  sessionRowMeta: {
+    color: theme.colors.textMuted,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  sessionRowFacts: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 10,
+  },
+
+  sessionRowFact: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+
+  sessionRowFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+
+  sessionRowFooterText: {
+    color: theme.colors.textMuted,
+    fontSize: 12,
+    fontWeight: '700',
+    flex: 1,
+  },
+
+  rowDeleteButton: {
+    backgroundColor: pageSurface.inset,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSoft,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+
+  rowDeleteButtonText: {
+    color: theme.colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+
+  profileRibbon: {
+    backgroundColor: pageSurface.panelAlt,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 14,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    ...theme.shadow.card,
+  },
+
+  profileRibbonCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  profileRibbonTitle: {
+    color: theme.colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+    marginBottom: 6,
+  },
+
+  profileRibbonBody: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+
+  profileRibbonCta: {
+    color: theme.colors.accent,
+    fontSize: 12,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+
+  routeLinkGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+
+  routeLinkButton: {
+    flexBasis: '48%',
+    flexGrow: 1,
+    minHeight: 58,
+    backgroundColor: pageSurface.panelRaised,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  routeLinkButtonText: {
+    color: theme.colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+
+  statePill: {
+    borderWidth: 1,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+
+  statePillText: {
+    fontSize: 12,
+    fontWeight: '900',
+  },
+
+  statePillActive: {
+    backgroundColor: 'rgba(112, 215, 165, 0.14)',
+    borderColor: 'rgba(112, 215, 165, 0.45)',
+  },
+
+  statePillActiveText: {
+    color: theme.colors.success,
+  },
+
+  statePillWaiting: {
+    backgroundColor: 'rgba(245, 198, 92, 0.14)',
+    borderColor: 'rgba(245, 198, 92, 0.45)',
+  },
+
+  statePillWaitingText: {
+    color: theme.colors.gold,
+  },
+
+  statePillReady: {
+    backgroundColor: 'rgba(127, 208, 255, 0.14)',
+    borderColor: 'rgba(127, 208, 255, 0.45)',
+  },
+
+  statePillReadyText: {
+    color: theme.colors.accent,
+  },
+
   loadingWrap: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 20,
+    paddingVertical: 24,
     gap: 10,
   },
 
@@ -624,215 +1345,6 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     fontSize: 13,
     fontWeight: '700',
-  },
-
-  emptyCard: {
-    backgroundColor: pageSurface.panelRaised,
-    borderRadius: theme.radius.lg,
-    padding: 18,
-    alignItems: 'center',
-  },
-
-  emptyTitle: {
-    color: theme.colors.text,
-    fontSize: 16,
-    fontWeight: '900',
-    marginBottom: 6,
-  },
-
-  emptyText: {
-    color: theme.colors.textMuted,
-    textAlign: 'center',
-    lineHeight: 20,
-    fontWeight: '700',
-  },
-
-  emptyButton: {
-    marginTop: 14,
-    minWidth: 180,
-    backgroundColor: theme.colors.primary,
-    borderRadius: theme.radius.lg,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...theme.shadow.glow,
-  },
-
-  emptyButtonText: {
-    color: theme.colors.text,
-    fontSize: 14,
-    fontWeight: '900',
-  },
-
-  sessionCard: {
-    backgroundColor: pageSurface.panelRaised,
-    borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: 14,
-    marginBottom: 10,
-    ...theme.shadow.card,
-  },
-
-  sessionTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-    gap: 12,
-  },
-
-  sessionMeta: {
-    flex: 1,
-    minWidth: 0,
-  },
-
-  sessionCodeButton: {
-    alignSelf: 'flex-start',
-  },
-
-  sessionCodeLabel: {
-    color: theme.colors.textMuted,
-    fontSize: 10,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginBottom: 2,
-  },
-
-  sessionCode: {
-    color: theme.colors.text,
-    fontSize: 22,
-    fontWeight: '900',
-    letterSpacing: 1.2,
-  },
-
-  sessionTime: {
-    color: theme.colors.textMuted,
-    fontSize: 12,
-    marginTop: 4,
-    fontWeight: '700',
-  },
-
-  sessionRole: {
-    color: theme.colors.accent,
-    fontSize: 11,
-    marginTop: 4,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 0.7,
-  },
-
-  sessionPill: {
-    borderWidth: 1,
-    borderRadius: theme.radius.pill,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-
-  sessionPillText: {
-    fontSize: 12,
-    fontWeight: '900',
-  },
-
-  sessionPillActive: {
-    backgroundColor: 'rgba(112, 215, 165, 0.14)',
-    borderColor: 'rgba(112, 215, 165, 0.45)',
-  },
-
-  sessionPillActiveText: {
-    color: theme.colors.success,
-  },
-
-  sessionPillWaiting: {
-    backgroundColor: 'rgba(245, 198, 92, 0.14)',
-    borderColor: 'rgba(245, 198, 92, 0.45)',
-  },
-
-  sessionPillWaitingText: {
-    color: theme.colors.gold,
-  },
-
-  sessionPillReady: {
-    backgroundColor: 'rgba(127, 208, 255, 0.14)',
-    borderColor: 'rgba(127, 208, 255, 0.45)',
-  },
-
-  sessionPillReadyText: {
-    color: theme.colors.accent,
-  },
-
-  sessionFactsRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 12,
-  },
-
-  sessionFact: {
-    flex: 1,
-    backgroundColor: pageSurface.inset,
-    borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.borderSoft,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-
-  sessionFactLabel: {
-    color: theme.colors.textMuted,
-    fontSize: 10,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginBottom: 4,
-  },
-
-  sessionFactValue: {
-    color: theme.colors.text,
-    fontSize: 13,
-    fontWeight: '800',
-  },
-
-  sessionFooter: {
-    flexDirection: 'row',
-    gap: 12,
-    alignItems: 'center',
-  },
-
-  sessionFooterCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-
-  sessionFooterTitle: {
-    color: theme.colors.text,
-    fontSize: 14,
-    fontWeight: '900',
-    marginBottom: 4,
-  },
-
-  sessionFooterText: {
-    color: theme.colors.textSecondary,
-    fontSize: 12,
-    lineHeight: 18,
-    fontWeight: '700',
-  },
-
-  deleteButton: {
-    minWidth: 94,
-    backgroundColor: pageSurface.inset,
-    borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.borderSoft,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    alignItems: 'center',
-  },
-
-  deleteButtonText: {
-    color: theme.colors.textSecondary,
-    fontSize: 14,
-    fontWeight: '800',
   },
 
   pressed: {

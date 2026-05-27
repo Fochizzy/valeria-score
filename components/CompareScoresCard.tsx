@@ -152,7 +152,7 @@ export default function CompareScoresCard({
                 <Text
                   style={[styles.scoreValue, !entry.hasScore && styles.scoreValuePending]}
                 >
-                  {entry.hasScore ? entry.totalScore : '—'}
+                  {entry.hasScore ? '✓' : '—'}
                 </Text>
               </View>
             </Pressable>

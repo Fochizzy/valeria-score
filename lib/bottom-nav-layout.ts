@@ -21,7 +21,11 @@ function normalizeInset(value: number) {
 }
 
 export function getBottomNavBottomOffset(safeAreaBottom: number) {
-  return BASE_BOTTOM_OFFSET + normalizeInset(safeAreaBottom)
+  // The app shell already wraps screens in SafeAreaView, so the floating
+  // bottom nav sits inside the safe area. Keep a fixed offset above that
+  // padded edge instead of double-counting the device inset here.
+  void safeAreaBottom
+  return BASE_BOTTOM_OFFSET
 }
 
 export function getBottomNavTopOffset(safeAreaTop: number) {
@@ -53,8 +57,12 @@ export function getBottomNavClearance(
   safeAreaBottom: number,
   _mode: BottomNavClearanceMode = 'default'
 ) {
+  // Same reasoning as getBottomNavBottomOffset(): the layout already applies
+  // bottom safe-area padding, so content only needs room for the bar itself,
+  // its fixed offset, and the visual gap above it.
+  void safeAreaBottom
   void _mode
-  return compactClearance(getBottomNavBottomOffset(safeAreaBottom))
+  return compactClearance(BASE_BOTTOM_OFFSET)
 }
 
 export function getBottomNavTopClearance(

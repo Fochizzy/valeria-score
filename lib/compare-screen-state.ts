@@ -10,6 +10,7 @@ type BuildCompareDashboardModelInput = {
   entries: CompareEntry[]
   sessionCreatorId: string
   expectedPlayerCount: number
+  scoreRevision?: number
 }
 
 type ShouldAutoRouteCompareViewerToVictoryInput = {
@@ -67,6 +68,7 @@ function buildCompareProgressEntries(entries: CompareEntry[]) {
     locked: entry.locked,
     userId: entry.userId,
     hasScore: entry.hasScore,
+    confirmedForCurrentRevision: entry.confirmedForCurrentRevision,
   }))
 }
 
@@ -75,7 +77,9 @@ export function countCommittedCompareEntries(entries: CompareEntry[]) {
 }
 
 export function countSavedCompareEntries(entries: CompareEntry[]) {
-  return entries.filter((entry) => entry.locked || entry.hasScore).length
+  return entries.filter(
+    (entry) => entry.locked || (entry.hasScore && entry.confirmedForCurrentRevision)
+  ).length
 }
 
 export function resolveCompareLeader(entries: CompareEntry[]) {
@@ -93,6 +97,15 @@ function buildCompareFinishState(
     committedScoreCount,
     presentParticipantCount
   )
+
+  if (committedScoreCount > 0 && savedScoreCount < committedScoreCount) {
+    return {
+      requiredScoreCount,
+      canFinishScores: false,
+      finishBlockTitle: 'Scores need re-saving',
+      finishBlockBody: `This game was reopened. ${savedScoreCount} of ${requiredScoreCount} players have re-saved their scores so far.`,
+    }
+  }
 
   if (savedScoreCount === 0) {
     return {
@@ -217,6 +230,7 @@ export function buildCompareDashboardModel({
   entries,
   sessionCreatorId,
   expectedPlayerCount,
+  scoreRevision: _scoreRevision,
 }: BuildCompareDashboardModelInput) {
   const committedScoreCount = countCommittedCompareEntries(entries)
   const savedScoreCount = countSavedCompareEntries(entries)
@@ -254,7 +268,7 @@ export function shouldAutoRouteCompareViewerToVictory({
 }
 
 export function getCompareEntryStatusTone(
-  entry: Pick<CompareEntry, 'hasScore' | 'locked'>
+  entry: Pick<CompareEntry, 'hasScore' | 'locked' | 'confirmedForCurrentRevision'>
 ): CompareEntryStatusTone {
   if (!entry.hasScore) return 'pending'
   if (entry.locked) return 'locked'
@@ -262,14 +276,16 @@ export function getCompareEntryStatusTone(
 }
 
 export function buildCompareEntryStatusText(
-  entry: Pick<CompareEntry, 'hasScore' | 'locked'>,
+  entry: Pick<CompareEntry, 'hasScore' | 'locked' | 'confirmedForCurrentRevision'>,
   options: { isEditable?: boolean } = {}
 ) {
   const baseText = !entry.hasScore
     ? 'Waiting to score'
     : entry.locked
-    ? sessionUiCopy.lockedState
-    : sessionUiCopy.savedState
+    ? 'Score finalized'
+    : entry.confirmedForCurrentRevision === false
+    ? 'Needs re-save'
+    : 'Score finalized'
 
-  return options.isEditable ? `${baseText} | Tap to edit` : baseText
+  return options.isEditable ? `${baseText} · Tap to edit` : baseText
 }

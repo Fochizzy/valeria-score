@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { reopenFinishedGameViaRpc } from './session-admin-flow'
 import {
   deleteGuestProfile as deleteGuestProfileFlow,
   deleteMyAccountAndData as deleteMyAccountAndDataFlow,
@@ -67,6 +68,12 @@ export async function leaveOwnedOrJoinedGame(sessionId: string) {
 
 export async function leaveAllGames() {
   await leaveAllGamesFlow({
+    invokeRpc: async (fn, args) => supabase.rpc(fn, args),
+  })
+}
+
+export async function reopenFinishedGame(sessionId: string) {
+  await reopenFinishedGameViaRpc(sessionId, {
     invokeRpc: async (fn, args) => supabase.rpc(fn, args),
   })
 }

@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { Animated, Easing, StyleSheet, View } from 'react-native'
 import {
   createVictoryFireworkBursts,
   type VictoryFireworkBurst,
 } from '../lib/victory-fireworks'
 
+const LOOP_PAUSE_MS = 1200
 const PARTICLE_VECTORS = [
   { dx: 0, dy: -42 },
   { dx: 30, dy: -26 },
@@ -86,7 +87,9 @@ export default function VictoryFireworks() {
     bursts.map(() => new Animated.Value(0))
   ).current
 
-  useEffect(() => {
+  const runLoop = useCallback(() => {
+    progressValues.forEach((v) => v.setValue(0))
+
     const animations = progressValues.map((value, index) =>
       Animated.sequence([
         Animated.delay(bursts[index]?.delayMs ?? 0),
@@ -100,13 +103,26 @@ export default function VictoryFireworks() {
     )
 
     const animation = Animated.parallel(animations)
-    animation.start()
+    animation.start(({ finished }) => {
+      if (finished) {
+        loopTimer.current = setTimeout(runLoop, LOOP_PAUSE_MS)
+      }
+    })
+
+    return animation
+  }, [bursts, progressValues])
+
+  const loopTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    const animation = runLoop()
 
     return () => {
       animation.stop()
       progressValues.forEach((value) => value.stopAnimation())
+      if (loopTimer.current) clearTimeout(loopTimer.current)
     }
-  }, [bursts, progressValues])
+  }, [runLoop])
 
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill}>

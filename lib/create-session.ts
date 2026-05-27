@@ -3,8 +3,11 @@ import { ensureProfileRow } from './profile'
 import {
   buildSessionParticipationSummaries,
   filterInProgressSessions,
+  mergeSessionIds,
+  sortActiveSessionSummaries,
 } from './session-participation-state.ts'
 import { deleteInProgressSessionViaRpc } from './session-admin-flow.ts'
+import { requireExpectedPlayerCount } from './expected-player-count'
 
 export type InProgressSession = {
   id: string
@@ -12,6 +15,7 @@ export type InProgressSession = {
   created_at: string
   updated_at: string
   created_by: string
+  expected_player_count: number | null
   is_host: boolean
   player_count: number
   locked_count: number
@@ -44,7 +48,7 @@ const createUniqueJoinCode = async () => {
   throw new Error('Could not generate a unique join code')
 }
 
-export const createGameSession = async () => {
+export const createGameSession = async (expectedPlayerCount: number | null | undefined) => {
   const {
     data: { user },
     error: userError,
@@ -56,12 +60,14 @@ export const createGameSession = async () => {
 
   await ensureProfileRow()
 
+  const safeExpectedPlayerCount = requireExpectedPlayerCount(expectedPlayerCount)
   const joinCode = await createUniqueJoinCode()
 
   const { data: session, error: sessionError } = await supabase
     .from('game_sessions')
     .insert({
       created_by: user.id,
+      expected_player_count: safeExpectedPlayerCount,
       join_code: joinCode,
     })
     .select()
@@ -110,7 +116,7 @@ export const createGameSession = async () => {
   }
 }
 
-export const getMyInProgressSessions = async (): Promise<InProgressSession[]> => {
+export const getMyActiveTables = async (): Promise<InProgressSession[]> => {
   const {
     data: { user },
     error: userError,
@@ -120,6 +126,13 @@ export const getMyInProgressSessions = async (): Promise<InProgressSession[]> =>
     throw new Error('User not authenticated')
   }
 
+  const { data: hostedRows, error: hostedError } = await supabase
+    .from('game_sessions')
+    .select('id')
+    .eq('created_by', user.id)
+
+  if (hostedError) throw hostedError
+
   const { data: membershipRows, error: membershipError } = await supabase
     .from('session_players')
     .select('session_id')
@@ -127,16 +140,18 @@ export const getMyInProgressSessions = async (): Promise<InProgressSession[]> =>
 
   if (membershipError) throw membershipError
 
+  const hostedSessionIds = ((hostedRows ?? []) as { id: string }[]).map((row) => row.id)
   const memberSessionIds = ((membershipRows ?? []) as { session_id: string }[]).map(
     (row) => row.session_id
   )
+  const activeSessionIds = mergeSessionIds(hostedSessionIds, memberSessionIds)
 
-  if (!memberSessionIds.length) return []
+  if (!activeSessionIds.length) return []
 
   const { data: sessions, error: sessionsError } = await supabase
     .from('game_sessions')
-    .select('id, join_code, created_at, created_by')
-    .in('id', memberSessionIds)
+    .select('id, join_code, created_at, created_by, expected_player_count')
+    .in('id', activeSessionIds)
 
   if (sessionsError) throw sessionsError
 
@@ -146,6 +161,7 @@ export const getMyInProgressSessions = async (): Promise<InProgressSession[]> =>
       join_code: string
       created_at: string
       created_by: string
+      expected_player_count: number | null
     }[]) || []
 
   if (!safeSessions.length) return []
@@ -166,18 +182,24 @@ export const getMyInProgressSessions = async (): Promise<InProgressSession[]> =>
 
   if (playerError) throw playerError
 
-  return filterInProgressSessions(
-    buildSessionParticipationSummaries({
-      sessions: safeSessions,
-      scoreRows: (scoreRows ?? []) as {
-        session_id: string
-        game_locked: boolean | null
-        updated_at: string | null
-      }[],
-      playerRows: (playerRows ?? []) as { session_id: string }[],
-      currentUserId: user.id,
-    })
+  return sortActiveSessionSummaries(
+    filterInProgressSessions(
+      buildSessionParticipationSummaries({
+        sessions: safeSessions,
+        scoreRows: (scoreRows ?? []) as {
+          session_id: string
+          game_locked: boolean | null
+          updated_at: string | null
+        }[],
+        playerRows: (playerRows ?? []) as { session_id: string }[],
+        currentUserId: user.id,
+      })
+    )
   )
+}
+
+export const getMyInProgressSessions = async (): Promise<InProgressSession[]> => {
+  return getMyActiveTables()
 }
 
 export const deleteInProgressSession = async (sessionId: string) => {

@@ -46,6 +46,7 @@ type ResolveLoadedScoreStateInput = {
     inputs: ScoreInputs
     updatedAt?: string | null
     isLocked?: boolean
+    confirmedForCurrentRevision?: boolean
   } | null
   draft?: ScoreDraftState | null
   sessionFinished: boolean
@@ -196,15 +197,22 @@ export function resolveLoadedScoreState({
   draft,
   sessionFinished,
 }: ResolveLoadedScoreStateInput) {
-  if (existingScore) {
-    const nextSlug = normalizeSlug(existingScore.selectedSlug) ?? normalizeSlug(initialSlug)
+  const savedSlug = normalizeSlug(existingScore?.selectedSlug)
+  const hasSubmittedScore = Boolean(savedSlug) || Boolean(existingScore?.isLocked)
+
+  if (existingScore && hasSubmittedScore) {
+    const nextSlug = savedSlug ?? normalizeSlug(initialSlug)
+    const needsResave =
+      existingScore.confirmedForCurrentRevision === false &&
+      !sessionFinished &&
+      !Boolean(existingScore.isLocked)
 
     return {
       selectedSlug: nextSlug,
       inputs: existingScore.inputs,
       baselineSlug: nextSlug,
       baselineInputs: existingScore.inputs,
-      lastSavedAt: existingScore.updatedAt ?? '',
+      lastSavedAt: needsResave ? '' : existingScore.updatedAt ?? '',
       isLocked: sessionFinished || Boolean(existingScore.isLocked),
     }
   }

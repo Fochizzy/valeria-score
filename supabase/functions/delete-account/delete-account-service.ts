@@ -15,6 +15,7 @@ export type DeleteAccountAndDataDeps = {
   deleteSessionPlayersByUserId: (userId: string) => Promise<void>
   unlinkGuestProfilesByLinkedUserId: (userId: string) => Promise<void>
   deleteGuestProfilesByOwnerUserId: (userId: string) => Promise<void>
+  deleteSoloGameResultsByOwnerUserId: (userId: string) => Promise<void>
   deleteProfileById: (userId: string) => Promise<void>
   deleteAuthUserById: (userId: string) => Promise<void>
 }
@@ -46,6 +47,7 @@ export async function deleteAccountAndData(
   await deps.deleteSessionPlayersByUserId(userId)
   await deps.unlinkGuestProfilesByLinkedUserId(userId)
   await deps.deleteGuestProfilesByOwnerUserId(userId)
+  await deps.deleteSoloGameResultsByOwnerUserId(userId)
   await deps.deleteProfileById(userId)
   await deps.deleteAuthUserById(userId)
 }

@@ -4,6 +4,12 @@ type AuthErrorLike = {
 
 type SignUpResult = {
   data?: {
+    user?: {
+      email?: string | null
+      phone?: string | null
+      identities?: unknown[] | null
+      is_anonymous?: boolean
+    } | null
     session?: unknown
   } | null
   error?: AuthErrorLike | null
@@ -22,6 +28,7 @@ type CreateUserFlowDeps = {
     email: string
     password: string
     options: {
+      emailRedirectTo?: string
       data: Record<string, unknown> & {
         display_name: string
       }
@@ -64,12 +71,27 @@ function resolveNextRoute(profile: ProfileLike) {
   return profile?.public_player_id ? '/create-session' : '/choose-player-id'
 }
 
+function isObfuscatedExistingUserSignUpResult(signUpResult: SignUpResult) {
+  const user = signUpResult.data?.user
+  if (!user || user.is_anonymous) return false
+
+  const hasIdentityBackedLogin = Boolean(user.email || user.phone)
+  const identities = user.identities
+
+  // Inference from Supabase Auth docs/source: email and phone signups should
+  // return a permanent identity-backed user, while duplicate-protected signup
+  // calls can come back as an obfuscated "fake user". We treat an email/phone
+  // user with an explicit empty identities array as that existing-account case.
+  return hasIdentityBackedLogin && Array.isArray(identities) && identities.length === 0
+}
+
 export async function createUserOrRecoverExistingAccount(
   {
     email,
     password,
     displayName,
     extraSignUpMetadata,
+    emailRedirectTo,
   }: {
     email: string
     password: string
@@ -78,6 +100,9 @@ export async function createUserOrRecoverExistingAccount(
     // smuggle a pending guest claim through the email-confirmation gate so it
     // can be redeemed on the user's first successful login.
     extraSignUpMetadata?: Record<string, unknown> | null
+    // Where Supabase should redirect after the user confirms their email.
+    // Should be the app's deep link scheme (e.g. 'valeriascore://').
+    emailRedirectTo?: string
   },
   deps: CreateUserFlowDeps
 ): Promise<CreateUserFlowResult> {
@@ -85,6 +110,7 @@ export async function createUserOrRecoverExistingAccount(
     email,
     password,
     options: {
+      ...(emailRedirectTo ? { emailRedirectTo } : {}),
       data: {
         display_name: displayName,
         ...(extraSignUpMetadata ?? {}),
@@ -92,11 +118,15 @@ export async function createUserOrRecoverExistingAccount(
     },
   })
 
-  if (signUpResult.error) {
-    if (!isExistingUserSignUpError(signUpResult.error.message)) {
-      throw new Error(signUpResult.error.message ?? 'Unknown error')
-    }
+  const shouldRecoverExistingAccount =
+    (signUpResult.error && isExistingUserSignUpError(signUpResult.error.message)) ||
+    isObfuscatedExistingUserSignUpResult(signUpResult)
 
+  if (signUpResult.error && !shouldRecoverExistingAccount) {
+    throw new Error(signUpResult.error.message ?? 'Unknown error')
+  }
+
+  if (shouldRecoverExistingAccount) {
     const signInResult = await deps.signInWithPassword({
       email,
       password,

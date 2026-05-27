@@ -21,9 +21,7 @@ import {
   type CompletedGameRecapPlayer,
   type CompletedGameRecapScoreRow,
 } from '../lib/completed-game-recap'
-import { copyJoinCodeWithFeedback } from '../lib/copy-join-code-client'
 import { supabase } from '../lib/supabase'
-import { Alert } from '../lib/themed-alert'
 
 const compareBackdrop = require('../assets/compare.png')
 
@@ -91,10 +89,8 @@ export default function GameRecapScreen() {
   const insets = useSafeAreaInsets()
   const params = useLocalSearchParams<{
     sessionId?: string
-    joinCode?: string
   }>()
   const sessionId = typeof params.sessionId === 'string' ? params.sessionId : ''
-  const joinCode = typeof params.joinCode === 'string' ? params.joinCode : ''
 
   const [players, setPlayers] = useState<CompletedGameRecapPlayer[]>([])
   const [loading, setLoading] = useState(true)
@@ -175,14 +171,6 @@ export default function GameRecapScreen() {
     void loadRecap()
   }, [loadRecap])
 
-  const handleCopyJoinCode = useCallback(async () => {
-    try {
-      await copyJoinCodeWithFeedback(joinCode || null)
-    } catch (error: any) {
-      Alert.alert('Copy failed', error?.message ?? 'Unknown error')
-    }
-  }, [joinCode])
-
   return (
     <ImageBackground
       source={compareBackdrop}
@@ -200,16 +188,6 @@ export default function GameRecapScreen() {
           showsVerticalScrollIndicator={false}
         >
           <ValeriaHeader compact showBack title="Game Recap" subtitle="Final scoring breakdown" />
-
-          {joinCode ? (
-            <Pressable
-              style={({ pressed }) => [styles.joinCodePill, pressed && styles.buttonPressed]}
-              onPress={handleCopyJoinCode}
-            >
-              <Text style={styles.joinCodeLabel}>Join Code</Text>
-              <Text style={styles.joinCodeValue}>{joinCode}</Text>
-            </Pressable>
-          ) : null}
 
           {loading ? (
             <View style={styles.statusCard}>
@@ -396,35 +374,6 @@ const styles = StyleSheet.create({
   content: {
     padding: 10,
     paddingTop: 4,
-  },
-
-  joinCodePill: {
-    alignSelf: 'center',
-    flexDirection: 'row',
-    gap: 6,
-    alignItems: 'center',
-    borderRadius: theme.radius.pill,
-    borderWidth: 1,
-    borderColor: 'rgba(100, 168, 255, 0.45)',
-    backgroundColor: 'rgba(31, 22, 52, 0.9)',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    marginBottom: 12,
-  },
-
-  joinCodeLabel: {
-    color: theme.colors.textMuted,
-    fontSize: 10,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 0.7,
-  },
-
-  joinCodeValue: {
-    color: theme.colors.accent,
-    fontSize: 12,
-    fontWeight: '900',
-    letterSpacing: 1,
   },
 
   statusCard: {

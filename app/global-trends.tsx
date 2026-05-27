@@ -24,7 +24,7 @@ import {
 } from '../lib/analytics-route-toggle'
 import { loadGlobalTrendsBundle, type GlobalTrendsBundle } from '../lib/global-trends-fetch'
 import { buildGlobalTrendsStatTiles } from '../lib/global-trends-stat-tiles'
-import { getBottomNavTopClearance } from '../lib/bottom-nav-layout'
+import { getBottomNavClearance } from '../lib/bottom-nav-layout'
 import { logoutAndClearActiveSessionState } from '../lib/logout'
 import {
   buildBoundManageAccountMenuActions,
@@ -127,6 +127,7 @@ export default function GlobalTrendsScreen() {
         onDukeStatistics: () => router.push('/duke-stats'),
         onPlayerStatistics: () => router.push('/player-stats'),
         onGlobalTrends: () => router.push('/global-trends'),
+        onSoloStatistics: () => router.push('/solo-stats' as never),
         onLogout: () => {
           void handleLogout()
         },
@@ -142,7 +143,7 @@ export default function GlobalTrendsScreen() {
     (key: string) => {
       const nextSegment = analyticsRouteSegments.find((segment) => segment.key === key)
       if (!nextSegment || nextSegment.href === analyticsRouteHrefByKey.trends) return
-      router.push(nextSegment.href)
+      router.push(nextSegment.href as never)
     },
     [analyticsRouteSegments]
   )
@@ -155,8 +156,7 @@ export default function GlobalTrendsScreen() {
           contentContainerStyle={[
             styles.content,
             {
-              paddingTop: getBottomNavTopClearance(insets.top),
-              paddingBottom: insets.bottom + 24,
+              paddingBottom: getBottomNavClearance(insets.bottom),
             },
           ]}
           refreshControl={
@@ -199,7 +199,7 @@ export default function GlobalTrendsScreen() {
             <>
               {loadError ? (
                 <View style={styles.errorCard}>
-                  <Text style={styles.errorTitle}>Couldn't refresh global trends</Text>
+                  <Text style={styles.errorTitle}>Could not refresh global trends</Text>
                   <Text style={styles.errorText}>{loadError}</Text>
                   <Pressable
                     style={({ pressed }) => [styles.errorButton, pressed && styles.buttonPressed]}
@@ -229,9 +229,7 @@ export default function GlobalTrendsScreen() {
                           {tiles.map((tile) => (
                             <View key={tile.label} style={styles.statTile}>
                               <Text style={styles.statTileLabel}>{tile.label}</Text>
-                              <Text style={styles.statTileValue} numberOfLines={1}>
-                                {tile.value}
-                              </Text>
+                              <Text style={styles.statTileValue}>{tile.value}</Text>
                               {tile.helper ? (
                                 <Text style={styles.statTileHelper} numberOfLines={1}>
                                   {tile.helper}

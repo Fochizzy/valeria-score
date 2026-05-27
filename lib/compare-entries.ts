@@ -17,6 +17,7 @@ export type CompareScoreRow = {
   duke_slug: string | null
   score_total: number | null
   game_locked: boolean | null
+  confirmed_revision?: number | null
   placement: number | null
   is_winner: boolean | null
 }
@@ -53,6 +54,8 @@ export type CompareEntry = {
   scoredByUserId: string | null
   dukeSlug: string | null
   dukeName: string
+  confirmedRevision: number
+  confirmedForCurrentRevision: boolean
   placement: number | null
   isWinner: boolean
   hasScore: boolean
@@ -61,6 +64,7 @@ export type CompareEntry = {
 }
 
 type BuildCompareEntriesInput = {
+  sessionScoreRevision?: number
   scoreRows: CompareScoreRow[]
   sessionPlayers: CompareSessionPlayerRow[]
   profiles: CompareProfileRow[]
@@ -68,6 +72,7 @@ type BuildCompareEntriesInput = {
 }
 
 export function buildCompareEntries({
+  sessionScoreRevision = 1,
   scoreRows,
   sessionPlayers,
   profiles,
@@ -110,6 +115,10 @@ export function buildCompareEntries({
       scoredByUserId: row.scored_by_user_id ?? row.owner_user_id ?? null,
       dukeSlug: row.duke_slug ?? null,
       dukeName: formatDukeName(row.duke_slug),
+      confirmedRevision: Number(row.confirmed_revision ?? 0),
+      confirmedForCurrentRevision:
+        Boolean(row.game_locked) ||
+        Number(row.confirmed_revision ?? 0) === Number(sessionScoreRevision ?? 1),
       placement: row.placement ?? null,
       isWinner: Boolean(row.is_winner),
       hasScore,
@@ -138,6 +147,8 @@ export function buildCompareEntries({
         scoredByUserId: userId,
         dukeSlug: null,
         dukeName: 'No Duke Yet',
+        confirmedRevision: 0,
+        confirmedForCurrentRevision: false,
         placement: null,
         isWinner: false,
         hasScore: false,
