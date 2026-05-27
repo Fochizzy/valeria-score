@@ -20,7 +20,7 @@ import ValeriaHeader from '../components/ValeriaHeader'
 import {
   createGameSession,
   deleteInProgressSession,
-  getMyInProgressSessions,
+  getMyActiveTables,
   type InProgressSession,
 } from '../lib/create-session'
 import { leaveOwnedOrJoinedGame } from '../lib/manage'
@@ -90,6 +90,7 @@ export default function CreateSessionScreen() {
   const [sessions, setSessions] = useState<InProgressSession[]>([])
   const [deletingId, setDeletingId] = useState('')
   const [savingExpectedFor, setSavingExpectedFor] = useState('')
+  const [selectedGameMode, setSelectedGameMode] = useState<'multiplayer' | 'solo'>('multiplayer')
   const [pendingExpectedPlayers, setPendingExpectedPlayers] =
     useState<ExpectedPlayerOption | null>(null)
   const [loggingOut, setLoggingOut] = useState(false)
@@ -98,7 +99,7 @@ export default function CreateSessionScreen() {
   const loadSessions = useCallback(async () => {
     try {
       setLoadingSessions(true)
-      const data = await getMyInProgressSessions()
+      const data = await getMyActiveTables()
       setSessions(data)
     } catch (err: any) {
       Alert.alert('Load failed', err?.message ?? 'Unknown error')
@@ -140,7 +141,7 @@ export default function CreateSessionScreen() {
   async function handleRefresh() {
     try {
       setRefreshing(true)
-      const data = await getMyInProgressSessions()
+      const data = await getMyActiveTables()
       setSessions(data)
     } catch (err: any) {
       Alert.alert('Refresh failed', err?.message ?? 'Unknown error')
@@ -162,10 +163,15 @@ export default function CreateSessionScreen() {
   }
 
   function handleOpenSoloMode() {
-    router.push('/solo-score')
+    setSelectedGameMode('solo')
   }
 
   async function handleCreateSession() {
+    if (selectedGameMode === 'solo') {
+      router.push('/solo-score')
+      return
+    }
+
     if (!isExpectedPlayerOption(pendingExpectedPlayers)) {
       Alert.alert(
         'Choose expected players',
@@ -306,7 +312,7 @@ export default function CreateSessionScreen() {
 
   const featuredSession = sessions[0] ?? null
   const additionalSessions = sessions.slice(1)
-  const canCreateGame = isExpectedPlayerOption(pendingExpectedPlayers) && !creating
+  const canCreateGame = selectedGameMode === 'solo' ? !creating : isExpectedPlayerOption(pendingExpectedPlayers) && !creating
 
   const featuredMeta = featuredSession
     ? buildSessionCardMeta({
@@ -376,7 +382,9 @@ export default function CreateSessionScreen() {
             >
               <Text style={styles.quickActionTitle}>{creating ? 'Creating...' : 'Create Game'}</Text>
               <Text style={styles.quickActionBody}>
-                {isExpectedPlayerOption(pendingExpectedPlayers)
+                {selectedGameMode === 'solo'
+                  ? 'Solo mode selected. Tap to begin your solo game.'
+                  : isExpectedPlayerOption(pendingExpectedPlayers)
                   ? `New ${pendingExpectedPlayers}-player table as host.`
                   : 'Select players below first.'}
               </Text>
@@ -397,14 +405,17 @@ export default function CreateSessionScreen() {
             <Text style={styles.sectionCaption}>Before You Start</Text>
             <Text style={styles.preStartTitle}>Expected Players</Text>
             <Text style={styles.preStartBody}>
-              {isExpectedPlayerOption(pendingExpectedPlayers)
+              {selectedGameMode === 'solo'
+                ? 'Solo mode is selected. Tap Create Game when you are ready to begin.'
+                : isExpectedPlayerOption(pendingExpectedPlayers)
                 ? `${pendingExpectedPlayers} players expected, including guests.`
                 : 'How many players, including guests?'}
             </Text>
 
             <View style={styles.expectedRow}>
               {EXPECTED_PLAYER_OPTIONS.map((count) => {
-                const active = count === pendingExpectedPlayers
+                const active =
+                  selectedGameMode === 'multiplayer' && count === pendingExpectedPlayers
 
                 return (
                   <Pressable
@@ -414,7 +425,10 @@ export default function CreateSessionScreen() {
                       active && styles.expectedChipActive,
                       pressed && styles.pressed,
                     ]}
-                    onPress={() => setPendingExpectedPlayers(count)}
+                    onPress={() => {
+                      setSelectedGameMode('multiplayer')
+                      setPendingExpectedPlayers(count)
+                    }}
                   >
                     <Text style={[styles.expectedChipText, active && styles.expectedChipTextActive]}>
                       {count}
@@ -427,6 +441,7 @@ export default function CreateSessionScreen() {
             <Pressable
               style={({ pressed }) => [
                 styles.soloModeButton,
+                selectedGameMode === 'solo' && styles.soloModeButtonActive,
                 pressed && styles.pressed,
               ]}
               onPress={handleOpenSoloMode}
@@ -462,7 +477,7 @@ export default function CreateSessionScreen() {
             {loadingSessions ? (
               <View style={styles.loadingWrap}>
                 <ActivityIndicator color={theme.colors.accent} />
-                <Text style={styles.loadingText}>Loading your tables...</Text>
+                <Text style={styles.loadingText}>Loading active tables...</Text>
               </View>
             ) : featuredSession ? (
               <>
@@ -967,6 +982,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 14,
     paddingVertical: 14,
+  },
+
+  soloModeButtonActive: {
+    backgroundColor: pageSurface.panelRaised,
+    borderColor: theme.colors.primaryLight,
   },
 
   soloModeButtonText: {

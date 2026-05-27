@@ -569,7 +569,7 @@ export default function CompareScreen() {
     autoRoutedToVictoryRef.current = false
     didFocusRefreshRef.current = false
     closeTiebreakModal()
-  }, [effectiveSessionId])
+  }, [closeTiebreakModal, effectiveSessionId])
 
   useEffect(() => {
     if (!tiebreakVisible) {

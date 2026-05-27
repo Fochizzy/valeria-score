@@ -122,7 +122,7 @@ export default function VictoryFireworks() {
       progressValues.forEach((value) => value.stopAnimation())
       if (loopTimer.current) clearTimeout(loopTimer.current)
     }
-  }, [runLoop])
+  }, [progressValues, runLoop])
 
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill}>

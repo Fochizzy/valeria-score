@@ -49,7 +49,6 @@ import {
 import {
   buildBoundManageAccountMenuActions,
   manageAccountAlertCopy,
-  manageAccountHeaderProps,
 } from '../lib/manage-account-menu'
 import { getBottomNavClearance } from '../lib/bottom-nav-layout'
 import { logoutAndClearActiveSessionState } from '../lib/logout'
@@ -100,7 +99,6 @@ export default function DukeStatsScreen() {
   const [search, setSearch] = useState('')
   const [loadError, setLoadError] = useState('')
   const [accountMenuVisible, setAccountMenuVisible] = useState(false)
-  const [loggingOut, setLoggingOut] = useState(false)
   const [selectedDukeSlug, setSelectedDukeSlug] = useState<string | null>(null)
   const [detailRows, setDetailRows] = useState<DukeInputProfileRow[]>([])
   const [globalRows, setGlobalRows] = useState<DukeInputProfileRow[]>([])
@@ -414,7 +412,6 @@ export default function DukeStatsScreen() {
   }, [screenState.filteredRows.length, screenState.selectedRow?.duke_name])
   const handleLogout = useCallback(async () => {
     try {
-      setLoggingOut(true)
       await logoutAndClearActiveSessionState({
         signOut: () => supabase.auth.signOut(),
         clearActiveSessionState,
@@ -422,8 +419,6 @@ export default function DukeStatsScreen() {
       router.replace('/')
     } catch (err: any) {
       Alert.alert('Logout failed', err?.message ?? 'Unknown error')
-    } finally {
-      setLoggingOut(false)
     }
   }, [])
   const accountMenuActions = useMemo(
@@ -441,9 +436,6 @@ export default function DukeStatsScreen() {
       }),
     [handleLogout]
   )
-  const openAccountActions = useCallback(() => {
-    setAccountMenuVisible(true)
-  }, [])
   const handleAnalyticsRouteChange = useCallback(
     (key: string) => {
       const nextSegment = analyticsRouteSegments.find((segment) => segment.key === key)
@@ -591,6 +583,11 @@ export default function DukeStatsScreen() {
   }, [
     activeTab,
     didLoadOnceRef,
+    dukeCategoryLoading,
+    dukeCategoryStats,
+    dukeExtras?.inputMix,
+    dukeExtras?.volatility,
+    dukeExtrasLoading,
     globalAnalyticsError,
     globalMarginRows,
     globalRows,
@@ -598,6 +595,7 @@ export default function DukeStatsScreen() {
     inputAnalyticsAvailable,
     loadSelectedDukeProfile,
     loading,
+    playerCountFilter,
     rows.length,
     screenState.detailError,
     screenState.detailLoading,

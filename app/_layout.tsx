@@ -95,7 +95,7 @@ export default function Layout() {
     )
 
     return () => subscription.remove()
-  }, [router, trackedRouteHref])
+  }, [pathname, router])
 
   return (
     <SafeAreaProvider>
