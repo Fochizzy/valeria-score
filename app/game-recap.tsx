@@ -10,12 +10,10 @@ import {
   View,
 } from 'react-native'
 import { useLocalSearchParams } from 'expo-router'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import ValeriaHeader from '../components/ValeriaHeader'
 import { theme } from '../constants/theme'
 import { cardImages } from '../data/cardImages'
-import { getBottomNavClearance } from '../lib/bottom-nav-layout'
 import {
   buildCompletedGameRecap,
   type CompletedGameRecapPlayer,
@@ -86,7 +84,6 @@ async function loadRecapScoreRows(sessionId: string) {
 }
 
 export default function GameRecapScreen() {
-  const insets = useSafeAreaInsets()
   const params = useLocalSearchParams<{
     sessionId?: string
   }>()
@@ -181,10 +178,7 @@ export default function GameRecapScreen() {
       <View style={styles.pageScrim}>
         <ScrollView
           style={styles.screen}
-          contentContainerStyle={[
-            styles.content,
-            { paddingBottom: getBottomNavClearance(insets.bottom) },
-          ]}
+          contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
           <ValeriaHeader compact showBack title="Game Recap" subtitle="Final scoring breakdown" />
@@ -374,6 +368,10 @@ const styles = StyleSheet.create({
   content: {
     padding: 10,
     paddingTop: 4,
+    // '/game-recap' is in PATHS_WITHOUT_BOTTOM_NAV, so there is no nav bar to
+    // clear here — just breathing room under the last player card. The shell's
+    // SafeAreaView already pads the bottom inset.
+    paddingBottom: 24,
   },
 
   statusCard: {

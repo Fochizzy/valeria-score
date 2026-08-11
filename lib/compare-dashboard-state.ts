@@ -5,6 +5,10 @@ import {
 
 export type CompareProgressEntry = {
   dukeSlug: string | null
+  // True guest seats only — rows with no real account behind them. This is the
+  // same line finish_game draws when it counts seats, so the client's seat
+  // total and the server's required_score_count stay in agreement. Added
+  // players and converted guests are real players and must not land here.
   isGuest: boolean
   locked: boolean
   userId?: string | null

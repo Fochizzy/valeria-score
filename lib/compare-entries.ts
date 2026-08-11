@@ -96,6 +96,9 @@ export function buildCompareEntries({
     })
     const hasScore = Boolean(row.duke_slug)
 
+    // Only a row that represents its owner's own seat suppresses the pending
+    // entry for that player. Guest rows are owned by whoever added them, so
+    // the owner still needs their own seat.
     if (!identity.isGuest && row.owner_user_id) {
       scoredUserIds.add(row.owner_user_id)
     }

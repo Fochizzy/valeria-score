@@ -111,7 +111,16 @@ export async function executePendingGuestClaim(
     }
   }
 
-  await deps.clearPendingMetadata()
+  // The claim itself is done and cannot be replayed — the RPC deletes the
+  // guest row. Letting a failure here escape would fail the whole sign-in for
+  // a claim that actually succeeded, and every later sign-in would re-read the
+  // uncleared metadata and hit 'No unclaimed guest matches that Player ID'
+  // forever. Swallow it: the worst case is one non-blocking notice next login.
+  try {
+    await deps.clearPendingMetadata()
+  } catch {
+    // Intentionally ignored — see above.
+  }
 
   return { status: 'claimed', result: data }
 }

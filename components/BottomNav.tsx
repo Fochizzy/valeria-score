@@ -11,7 +11,16 @@ import {
 import { useGlobalSearchParams, usePathname, useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { theme } from '../constants/theme'
-import { getBottomNavBottomOffset } from '../lib/bottom-nav-layout'
+import {
+  BOTTOM_NAV_BAR_BORDER_WIDTH,
+  BOTTOM_NAV_BAR_HEIGHT,
+  BOTTOM_NAV_BAR_PADDING_BOTTOM,
+  BOTTOM_NAV_BAR_PADDING_TOP,
+  BOTTOM_NAV_BRANDING_LINE_HEIGHT,
+  BOTTOM_NAV_BRANDING_PADDING,
+  BOTTOM_NAV_TAB_MIN_HEIGHT,
+  getBottomNavBottomOffset,
+} from '../lib/bottom-nav-layout'
 import { buildBottomNavRoute } from '../lib/bottom-nav-route'
 import {
   buildBoundManageAccountMenuActions,
@@ -75,23 +84,6 @@ export default function BottomNav() {
   const wrapStyle = useMemo(
     () => [styles.wrap, { bottom: getBottomNavBottomOffset(insets.bottom) }],
     [insets.bottom]
-  )
-
-  const barStyle = useMemo(
-    () => [styles.bar, { paddingBottom: 0 }],
-    []
-  )
-
-  const brandingPad = Math.max(6, insets.bottom / 2)
-  const brandingStyle = useMemo(
-    () => [
-      styles.brandingText,
-      {
-        paddingTop: brandingPad,
-        paddingBottom: brandingPad,
-      },
-    ],
-    [brandingPad]
   )
 
   const scoreDraftStorageKey = useMemo(
@@ -254,7 +246,7 @@ export default function BottomNav() {
   return (
     <>
       <View style={wrapStyle}>
-        <View style={barStyle}>
+        <View style={styles.bar}>
           <View style={styles.tabsRow}>
             <Pressable
               onPress={handleHomePress}
@@ -291,7 +283,22 @@ export default function BottomNav() {
             })}
           </View>
 
-          <Text style={brandingStyle}>VALERIA CARD KINGDOMS</Text>
+          {/*
+            The bar's height is a fixed constant that every scrollable screen
+            reserves as clearance, and minHeight is a floor rather than a cap.
+            fontSize scales with the OS text setting but lineHeight does not,
+            so an unconstrained wordmark would wrap on a large-text device and
+            grow the bar past the space screens reserved, hiding their last
+            rows behind it. Pin this decorative line to exactly one unscaled
+            row so the bar's rendered height always matches the constant.
+          */}
+          <Text
+            style={styles.brandingText}
+            numberOfLines={1}
+            allowFontScaling={false}
+          >
+            VALERIA CARD KINGDOMS
+          </Text>
         </View>
       </View>
 
@@ -307,7 +314,7 @@ export default function BottomNav() {
 }
 
 const ICON_SIZE = 62
-const CHIP_HEIGHT = 78
+const CHIP_HEIGHT = BOTTOM_NAV_TAB_MIN_HEIGHT
 
 const styles = StyleSheet.create({
   wrap: {
@@ -322,15 +329,16 @@ const styles = StyleSheet.create({
   bar: {
     flexDirection: 'column',
     backgroundColor: '#1A1330',
+    minHeight: BOTTOM_NAV_BAR_HEIGHT,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    borderTopWidth: 1,
+    borderTopWidth: BOTTOM_NAV_BAR_BORDER_WIDTH,
     borderLeftWidth: 1,
     borderRightWidth: 1,
     borderColor: theme.colors.border,
     paddingHorizontal: 7,
-    paddingTop: 12,
-    paddingBottom: 7,
+    paddingTop: BOTTOM_NAV_BAR_PADDING_TOP,
+    paddingBottom: BOTTOM_NAV_BAR_PADDING_BOTTOM,
     ...theme.shadow.card,
   },
 
@@ -381,8 +389,11 @@ const styles = StyleSheet.create({
   brandingText: {
     color: 'rgba(194, 170, 255, 0.22)',
     fontSize: 10,
+    lineHeight: BOTTOM_NAV_BRANDING_LINE_HEIGHT,
     fontWeight: '900',
     letterSpacing: 3,
     textAlign: 'center',
+    paddingTop: BOTTOM_NAV_BRANDING_PADDING,
+    paddingBottom: BOTTOM_NAV_BRANDING_PADDING,
   },
 })

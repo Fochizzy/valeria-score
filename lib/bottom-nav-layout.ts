@@ -4,14 +4,29 @@ import {
   type BottomNavItemKey,
 } from './bottom-nav-appearance.ts'
 
-const BASE_BOTTOM_OFFSET = 10
-const BASE_TOP_OFFSET = 6
+export const BOTTOM_NAV_BASE_BOTTOM_OFFSET = 10
+export const BOTTOM_NAV_BASE_TOP_OFFSET = 6
+export const BOTTOM_NAV_TAB_MIN_HEIGHT = 78
+export const BOTTOM_NAV_BAR_BORDER_WIDTH = 1
+export const BOTTOM_NAV_BAR_PADDING_TOP = 12
+export const BOTTOM_NAV_BAR_PADDING_BOTTOM = 7
+export const BOTTOM_NAV_BRANDING_PADDING = 6
+export const BOTTOM_NAV_BRANDING_LINE_HEIGHT = 12
+export const BOTTOM_NAV_CONTENT_GAP = 16
 
-// Compact dimensions matching the redesigned top nav: a single row of 32px
-// icons + 6/6 vertical padding + 1px borders ≈ 56px. The clearance also
-// reserves a comfortable gap so the page title sits below the bar.
-const COMPACT_BAR_MIN_HEIGHT = 72
-const COMPACT_CONTENT_GAP = 16
+// Keep the shared clearance math aligned with the actual floating bottom-nav
+// chrome so scrollable screens clear the full menu bar instead of an outdated
+// compact-shell estimate. Every term here is a style the bar actually applies,
+// including the top border — Yoga counts borders in the border-box height, so
+// leaving it out made the constant one pixel short of what renders and stopped
+// styles.bar's minHeight from ever binding.
+export const BOTTOM_NAV_BAR_HEIGHT =
+  BOTTOM_NAV_BAR_BORDER_WIDTH +
+  BOTTOM_NAV_BAR_PADDING_TOP +
+  BOTTOM_NAV_TAB_MIN_HEIGHT +
+  BOTTOM_NAV_BRANDING_PADDING * 2 +
+  BOTTOM_NAV_BRANDING_LINE_HEIGHT +
+  BOTTOM_NAV_BAR_PADDING_BOTTOM
 
 export type BottomNavClearanceMode = 'default' | 'score'
 
@@ -25,11 +40,11 @@ export function getBottomNavBottomOffset(safeAreaBottom: number) {
   // bottom nav sits inside the safe area. Keep a fixed offset above that
   // padded edge instead of double-counting the device inset here.
   void safeAreaBottom
-  return BASE_BOTTOM_OFFSET
+  return BOTTOM_NAV_BASE_BOTTOM_OFFSET
 }
 
 export function getBottomNavTopOffset(safeAreaTop: number) {
-  return BASE_TOP_OFFSET + normalizeInset(safeAreaTop)
+  return BOTTOM_NAV_BASE_TOP_OFFSET + normalizeInset(safeAreaTop)
 }
 
 function resolveBottomNavActiveKey(
@@ -46,11 +61,11 @@ export function getBottomNavBarLayout(
 
 export function getBottomNavContentGap(_mode: BottomNavClearanceMode = 'default') {
   void _mode
-  return COMPACT_CONTENT_GAP
+  return BOTTOM_NAV_CONTENT_GAP
 }
 
 function compactClearance(safeArea: number) {
-  return safeArea + COMPACT_BAR_MIN_HEIGHT + COMPACT_CONTENT_GAP
+  return safeArea + BOTTOM_NAV_BAR_HEIGHT + BOTTOM_NAV_CONTENT_GAP
 }
 
 export function getBottomNavClearance(
@@ -62,7 +77,7 @@ export function getBottomNavClearance(
   // its fixed offset, and the visual gap above it.
   void safeAreaBottom
   void _mode
-  return compactClearance(BASE_BOTTOM_OFFSET)
+  return compactClearance(BOTTOM_NAV_BASE_BOTTOM_OFFSET)
 }
 
 export function getBottomNavTopClearance(
@@ -71,11 +86,11 @@ export function getBottomNavTopClearance(
 ) {
   // The floating top nav lives inside the layout's SafeAreaView, which already
   // pads past the status bar. Don't double-count the safe-area inset here —
-  // just reserve the bar's own height (72) plus the small base offset (6) and
-  // the content gap (16).
+  // just reserve the bar's actual shell height plus the small base offset and
+  // the content gap.
   void _safeAreaTop
   void _mode
-  return compactClearance(BASE_TOP_OFFSET)
+  return compactClearance(BOTTOM_NAV_BASE_TOP_OFFSET)
 }
 
 void resolveBottomNavActiveKey

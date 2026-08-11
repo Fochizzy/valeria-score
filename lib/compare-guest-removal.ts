@@ -1,5 +1,4 @@
 type CompareGuestRemovalEntry = {
-  isGuest: boolean
   scoreId: string | null | undefined
   guestEntryId: string | null | undefined
   scoredByUserId?: string | null | undefined
@@ -79,9 +78,16 @@ export function resolveCompareGuestRemovalMode(
   entry: CompareGuestRemovalEntry
 ): CompareGuestRemovalMode | null {
   const safeScoreId = String(entry.scoreId ?? '').trim()
-  if (!entry.isGuest || !safeScoreId) {
+  if (!safeScoreId) {
     return null
   }
+
+  // Deliberately not gated on the display `isGuest` flag. That flag now means
+  // "no real account behind this seat", which is false for added players —
+  // exactly the seats 'added-player-entry' mode exists to remove. The two
+  // checks below are already exhaustive on their own: only guest seats carry a
+  // guestEntryId, and only added-player seats have an owner that differs from
+  // their editor.
 
   const safeGuestEntryId = String(entry.guestEntryId ?? '').trim()
   if (safeGuestEntryId) {
