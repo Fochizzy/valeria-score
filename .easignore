@@ -48,6 +48,15 @@ app-example
 # local build caches
 .gradle-home/
 .gradle-home-build2/
+.gradle-home-verify/
+.npm-cache/
+
+# local verification artifacts and marketing assets not needed by builds
+tmp-*
+app-store-screenshots/
+Feature Image.png
+supabase/.temp/
+docs/
 
 # Include the local Expo env file in EAS uploads for builds started on this machine.
 !.env
