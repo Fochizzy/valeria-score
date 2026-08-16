@@ -3,7 +3,7 @@
     "name": "Valeria Score",
     "slug": "valeria-score",
     "scheme": "valeriascore",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0A0F1E",
@@ -53,7 +53,8 @@
       "icon": "./assets/icon.png"
     },
     "web": {
-      "favicon": "./assets/icon.png"
+      "favicon": "./assets/icon.png",
+      "output": "static"
     },
     "extra": {
       "router": {},

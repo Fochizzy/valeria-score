@@ -62,6 +62,15 @@ Rules of thumb:
   `expo_runtime_version` in `android/app/src/main/res/values/strings.xml`,
   then ship a full store build.
 
+## Scaling note: analytics refresh
+
+Every `session_scores` write fires a statement-level trigger that runs
+`private.rebuild_public_analytics()`. This is fine at the current data size,
+but it is the first thing to revisit as tables grow: the standard evolution
+is to drop the triggers and refresh on a schedule instead (pg_cron every
+minute or so), trading a little stat freshness for write throughput. No
+action needed until score writes feel slow.
+
 ## History CSV export
 
 `Manage Data → Completed Games → Export CSV` shares a spreadsheet with one

@@ -1,50 +1,49 @@
-# Welcome to your Expo app 👋
+# Valeria Score
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A fan-made score keeper and campaign companion for **Valeria: Card Kingdoms**.
+Built with Expo (React Native) on a Supabase backend.
 
-## Get started
+## What it does
 
-1. Install dependencies
+- **Live tables** — host a session, share a 6-character join code or a
+  scannable QR, and every player scores their own seat with realtime sync.
+- **Full scoring engine** — per-duke multipliers for all 24 dukes, autosaved
+  drafts, offline-tolerant saves, tiebreak resolution, and locked recaps.
+- **Analytics** — duke win rates and input profiles, player stats and
+  head-to-heads, global trends, and percentile comparisons.
+- **Solo mode** — score battles against the Dark Lord with their own stats.
+- **Guests** — seat players without accounts; they can claim their stats
+  later by converting the guest Player ID into an account.
+- **History** — recaps of every finished game plus CSV export.
 
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Development
 
 ```bash
-npm run reset-project
+npm install
+npx expo start          # Metro dev server (Android dev client / web)
+npm test                # node:test suite
+npx tsc --noEmit        # typecheck
+npx expo lint           # eslint
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Copy `.env.example` to `.env` and fill in the Supabase project values before
+running. The `android/` folder is generated (gitignored); EAS builds prebuild
+from `app.json`, so config changes belong there, not in native files.
 
-## Learn more
+## Builds and releases
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+npm run build:android:production   # EAS cloud build -> Play AAB
+npm run build:android:apk         # internal-distribution APK
+eas update --channel production   # ship a JS-only fix over the air
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+Release credentials, push-notification setup (Sentry, FCM), and the OTA
+runtime-version rules live in [docs/release-setup.md](docs/release-setup.md).
 
-## Join the community
+## Backend
 
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Supabase (Postgres + RLS + edge functions). Migrations live in
+`supabase/migrations/` and their filenames match the versions recorded in
+production — CI's `migration-drift` job fails if they ever disagree. Edge
+functions deploy automatically from `main` via GitHub Actions.
