@@ -18,6 +18,7 @@ import * as Haptics from 'expo-haptics'
 import { MaterialCommunityIcons } from '@expo/vector-icons'
 import { ScoreRow } from '../components/ScoreRow'
 import DukePicker from '../components/DukePicker'
+import TurnTrackerCard from '../components/TurnTrackerCard'
 import { ScoreTotal } from '../components/ScoreTotal'
 import CountBadge from '../components/CountBadge'
 import SessionContextStrip from '../components/SessionContextStrip'
@@ -25,6 +26,8 @@ import { theme } from '../constants/theme'
 import { cards, type DukeCard, type StatKey } from '../data/cards'
 import { cardImages } from '../data/cardImages'
 import { Alert } from '../lib/themed-alert'
+import { subscribeToConnectivity } from '../lib/connectivity'
+import { isLikelyNetworkError, runWithNetworkRetry } from '../lib/network-retry'
 import { getStatsForCard, type StatMetaItem } from '../data/statMeta'
 import {
   calculateTotalScore,
@@ -814,6 +817,19 @@ export default function ScoreScreen() {
     return autoSavePromise
   }, [persistDraftSnapshot])
 
+  // When connectivity returns, push the latest local inputs up as a server
+  // draft. runAutoSave no-ops unless there are unsynced changes.
+  useEffect(() => {
+    let wasOnline = true
+
+    return subscribeToConnectivity((online) => {
+      if (online && !wasOnline) {
+        void runAutoSave()
+      }
+      wasOnline = online
+    })
+  }, [runAutoSave])
+
   function updateInput(key: StatKey, value: number) {
     if (isInteractionBlocked) return
 
@@ -1147,12 +1163,16 @@ export default function ScoreScreen() {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
       setSaving(true)
       const normalizedCurrentInputs = normalizeScoreInputs(inputs)
-      const savedRow = await persistCommittedSnapshot({
-        sessionId: effectiveSessionId,
-        dukeSlug: selectedDuke.slug,
-        inputs: normalizedCurrentInputs,
-        totalScore,
-      })
+      // Ride out table Wi-Fi blips: transient network failures retry with
+      // backoff before we surface an error. Real rejections rethrow at once.
+      const savedRow = await runWithNetworkRetry(() =>
+        persistCommittedSnapshot({
+          sessionId: effectiveSessionId,
+          dukeSlug: selectedDuke.slug,
+          inputs: normalizedCurrentInputs,
+          totalScore,
+        })
+      )
 
       const now =
         typeof savedRow?.updated_at === 'string' && savedRow.updated_at
@@ -1176,7 +1196,14 @@ export default function ScoreScreen() {
         })
       )
     } catch (err: any) {
-      Alert.alert('Save failed', err?.message ?? 'Unknown error')
+      if (isLikelyNetworkError(err)) {
+        Alert.alert(
+          "You're offline",
+          'Your score is saved on this device. Tap Save again once you reconnect to sync it with the table.'
+        )
+      } else {
+        Alert.alert('Save failed', err?.message ?? 'Unknown error')
+      }
     } finally {
       setSaving(false)
     }
@@ -1294,6 +1321,10 @@ export default function ScoreScreen() {
         </View>
 
       <SessionContextStrip items={contextItems} />
+
+      {effectiveSessionId && !isGuestMode && !isAddedPlayerMode ? (
+        <TurnTrackerCard sessionId={effectiveSessionId} />
+      ) : null}
 
       {saveFeedback ? (
         <View style={styles.successCard}>
@@ -1649,6 +1680,12 @@ const styles = StyleSheet.create({
   content: {
     padding: 10,
     paddingBottom: 16,
+    // Android 16 ignores the portrait lock on large screens (>=600dp), so
+    // this sheet can render in tablet landscape. Cap and center the column
+    // instead of smearing rows across the full width.
+    width: '100%',
+    maxWidth: 640,
+    alignSelf: 'center',
   },
 
   titleRow: {

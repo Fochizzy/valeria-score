@@ -30,6 +30,7 @@ import {
 } from '../lib/finish-tie-resolution'
 import { copyJoinCodeWithFeedback } from '../lib/copy-join-code-client'
 import { deleteOwnedGame } from '../lib/manage'
+import { notifyGameFinished } from '../lib/notifications'
 import {
   buildManageAccountMenuActions,
   manageAccountAlertCopy,
@@ -492,6 +493,7 @@ export default function CompareScreen() {
             await finishGameViaRpc(effectiveSessionId, {
               invokeRpc: async (fn, args) => supabase.rpc(fn, args),
             })
+            void notifyGameFinished(effectiveSessionId)
             await fetchScores(false)
             router.replace(
               buildVictoryRoute(effectiveSessionId, effectiveJoinCode) as never
@@ -544,6 +546,7 @@ export default function CompareScreen() {
           invokeRpc: async (fn, args) => supabase.rpc(fn, args),
         }
       )
+      void notifyGameFinished(effectiveSessionId)
       closeTiebreakModal()
       await fetchScores(false)
       router.replace(buildVictoryRoute(effectiveSessionId, effectiveJoinCode) as never)

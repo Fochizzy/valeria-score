@@ -24,6 +24,11 @@ export const compareScreenStyles = StyleSheet.create({
   content: {
     padding: 12,
     paddingBottom: 16,
+    // Keep a readable centered column when Android 16 large screens ignore
+    // the portrait lock and render this screen in landscape.
+    width: '100%',
+    maxWidth: 640,
+    alignSelf: 'center',
   },
 
   heroCard: {

@@ -1,6 +1,8 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { File, Paths } from 'expo-file-system'
 import { router } from 'expo-router'
+import * as Sharing from 'expo-sharing'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useFocusEffect } from '@react-navigation/native'
 import {
@@ -19,6 +21,11 @@ import ActionDialogModal, {
 } from '../components/ActionDialogModal'
 import { theme } from '../constants/theme'
 import { getGuestProfileLabels } from '../lib/guest-profile-identity'
+import {
+  buildHistoryExportCsv,
+  buildHistoryExportFileName,
+  type HistoryExportSessionScoreRow,
+} from '../lib/history-export'
 import {
   buildManageDataHistoryItems,
   type ManageDataHistoryItem,
@@ -107,6 +114,7 @@ function buildHistoryCardCopy(item: ManageDataHistoryItem) {
 export default function ManageDataScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [working, setWorking] = useState(false)
+  const [exportingCsv, setExportingCsv] = useState(false)
   const [guestProfiles, setGuestProfiles] = useState<GuestProfileRow[]>([])
   const [completedSessions, setCompletedSessions] = useState<SessionRow[]>([])
   const [soloResults, setSoloResults] = useState<SoloGameResultRow[]>([])
@@ -237,6 +245,83 @@ export default function ManageDataScreen() {
     await load()
     setRefreshing(false)
   }, [load])
+
+  const handleExportHistoryCsv = useCallback(async () => {
+    try {
+      setExportingCsv(true)
+
+      const sessionIds = completedSessions.map((session) => session.id)
+      let scoreRows: HistoryExportSessionScoreRow[] = []
+
+      if (sessionIds.length > 0) {
+        // Prefer the recap identity columns; fall back for databases that
+        // predate them, mirroring the recap screen's tolerance.
+        const primary = await supabase
+          .from('session_scores')
+          .select(
+            'session_id, player_name, recap_player_name, recap_player_id, duke_slug, score_total, placement, is_winner'
+          )
+          .in('session_id', sessionIds)
+          .eq('game_locked', true)
+
+        if (!primary.error) {
+          scoreRows = (primary.data ?? []) as HistoryExportSessionScoreRow[]
+        } else {
+          const legacy = await supabase
+            .from('session_scores')
+            .select(
+              'session_id, player_name, duke_slug, score_total, placement, is_winner'
+            )
+            .in('session_id', sessionIds)
+            .eq('game_locked', true)
+
+          if (legacy.error) throw legacy.error
+          scoreRows = (legacy.data ?? []) as HistoryExportSessionScoreRow[]
+        }
+      }
+
+      const scoreRowsBySession = new Map<string, HistoryExportSessionScoreRow[]>()
+
+      for (const row of scoreRows) {
+        const bucket = scoreRowsBySession.get(row.session_id)
+
+        if (bucket) {
+          bucket.push(row)
+        } else {
+          scoreRowsBySession.set(row.session_id, [row])
+        }
+      }
+
+      const csv = buildHistoryExportCsv({
+        sessionGames: completedSessions.map((session) => ({
+          id: session.id,
+          joinCode: session.join_code,
+          finishedAt: session.updated_at ?? session.created_at ?? null,
+        })),
+        scoreRowsBySession,
+        soloGames: soloResults,
+      })
+
+      const file = new File(
+        Paths.cache,
+        buildHistoryExportFileName(new Date().toISOString())
+      )
+      file.write(csv)
+
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(file.uri, {
+          mimeType: 'text/csv',
+          dialogTitle: 'Export game history',
+        })
+      } else {
+        Alert.alert('Export ready', `CSV saved to ${file.uri}`)
+      }
+    } catch (err: any) {
+      Alert.alert('Export failed', err?.message ?? 'Unknown error')
+    } finally {
+      setExportingCsv(false)
+    }
+  }, [completedSessions, soloResults])
 
   const handleDeleteGuestProfile = useCallback(
     async (guestId: string, guestLabel: string) => {
@@ -741,6 +826,29 @@ export default function ManageDataScreen() {
                   </View>
                 </View>
 
+                {historyItems.length > 0 ? (
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.exportCsvButton,
+                      pressed && styles.buttonPressed,
+                      exportingCsv && styles.exportCsvButtonBusy,
+                    ]}
+                    onPress={() => void handleExportHistoryCsv()}
+                    disabled={exportingCsv}
+                    accessibilityRole="button"
+                    accessibilityLabel="Export game history as CSV"
+                  >
+                    <MaterialCommunityIcons
+                      name="file-delimited-outline"
+                      size={16}
+                      color={theme.colors.accent}
+                    />
+                    <Text style={styles.exportCsvButtonText}>
+                      {exportingCsv ? 'Exporting...' : 'Export CSV'}
+                    </Text>
+                  </Pressable>
+                ) : null}
+
                 {historyItems.length === 0 ? (
                   <View style={styles.emptyPanel}>
                     <Text style={styles.emptyTitle}>No finished games yet</Text>
@@ -1072,6 +1180,29 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.borderSoft,
     padding: 14,
+  },
+
+  exportCsvButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: theme.colors.surfaceRaised,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSoft,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+
+  exportCsvButtonBusy: {
+    opacity: 0.6,
+  },
+
+  exportCsvButtonText: {
+    color: theme.colors.accent,
+    fontSize: 13,
+    fontWeight: '900',
   },
 
   emptyTitle: {

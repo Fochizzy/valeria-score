@@ -3,13 +3,22 @@ import { Stack, useGlobalSearchParams, usePathname, useRouter } from 'expo-route
 import { StatusBar } from 'expo-status-bar'
 import { BackHandler, Platform, StyleSheet, View } from 'react-native'
 import * as Linking from 'expo-linking'
+import * as Notifications from 'expo-notifications'
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
 import ActiveSessionVictoryWatcher from '../components/ActiveSessionVictoryWatcher'
 import BottomNav from '../components/BottomNav'
+import OfflineBanner from '../components/OfflineBanner'
 import ThemedAlertHost from '../components/ThemedAlertHost'
 import { theme } from '../constants/theme'
 import { extractSessionTokensFromUrl } from '../lib/auth-link-session'
+import { initMonitoring, setMonitoringUser, wrapRootComponent } from '../lib/monitoring'
+import {
+  configureNotificationHandling,
+  extractVictoryRouteFromNotification,
+  registerPushTokenForCurrentUser,
+} from '../lib/notifications'
 import { supabase } from '../lib/supabase'
+import { buildVictoryRoute } from '../lib/victory-route'
 import {
   buildTrackedRouteHref,
   getTrackedPreviousRoute,
@@ -24,7 +33,12 @@ const manageAccountSwipeBackScreenOptions = Object.freeze({
   animationMatchesGesture: true,
 })
 
-export default function Layout() {
+// Initialize crash reporting before the first render. No-op without a DSN.
+initMonitoring()
+
+configureNotificationHandling()
+
+function Layout() {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useGlobalSearchParams() as Record<
@@ -61,6 +75,55 @@ export default function Layout() {
 
     return () => subscription.remove()
   }, [])
+
+  // Attach the signed-in user id to crash reports so multiplayer issues can
+  // be traced to a session participant, and bind this device's push token to
+  // the account whenever a session is established.
+  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setMonitoringUser(session?.user?.id ?? null)
+
+      if (session?.user) {
+        void registerPushTokenForCurrentUser()
+      }
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  // Tapping a "game finished" push lands the player on that game's recap.
+  useEffect(() => {
+    function routeFromNotificationData(data: Record<string, unknown> | undefined) {
+      const target = extractVictoryRouteFromNotification(data)
+
+      if (target) {
+        router.push(buildVictoryRoute(target.sessionId, target.joinCode) as never)
+      }
+    }
+
+    const subscription = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        routeFromNotificationData(response.notification.request.content.data)
+      }
+    )
+
+    // Cold start via notification tap: wait a beat so the auth bootstrap's
+    // initial redirect settles before we route to the recap on top of it.
+    const coldStartTimer = setTimeout(() => {
+      Notifications.getLastNotificationResponseAsync().then((response) => {
+        if (response) {
+          routeFromNotificationData(response.notification.request.content.data)
+        }
+      })
+    }, 1200)
+
+    return () => {
+      subscription.remove()
+      clearTimeout(coldStartTimer)
+    }
+  }, [router])
 
   useEffect(() => {
     noteTrackedRouteVisit(trackedRouteHref)
@@ -103,6 +166,7 @@ export default function Layout() {
         <StatusBar style="light" />
 
         <View style={styles.container}>
+          <OfflineBanner />
           <ActiveSessionVictoryWatcher />
 
           <Stack
@@ -122,6 +186,7 @@ export default function Layout() {
             <Stack.Screen name="choose-player-id" />
             <Stack.Screen name="create-session" />
             <Stack.Screen name="join-game" />
+            <Stack.Screen name="join/[code]" />
             <Stack.Screen name="duke-select" />
             <Stack.Screen name="score" />
             <Stack.Screen name="compare" />
@@ -143,6 +208,8 @@ export default function Layout() {
     </SafeAreaProvider>
   )
 }
+
+export default wrapRootComponent(Layout)
 
 const styles = StyleSheet.create({
   safe: {

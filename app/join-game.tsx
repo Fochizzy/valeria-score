@@ -8,7 +8,7 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter } from 'expo-router'
 
 import ValeriaHeader from '../components/ValeriaHeader'
 import { joinSessionByCode } from '../lib/sessions'
@@ -18,7 +18,12 @@ const citizenBackdrop = require('../assets/Citizen Backdrop.png')
 
 export default function JoinGameScreen() {
   const router = useRouter()
-  const [joinCode, setJoinCode] = useState('')
+  // Prefilled when the user arrives from a scanned QR link that could not
+  // auto-join (e.g. they had to sign in first).
+  const params = useLocalSearchParams<{ code?: string }>()
+  const [joinCode, setJoinCode] = useState(
+    typeof params.code === 'string' ? params.code : ''
+  )
   const [loading, setLoading] = useState(false)
 
   const normalizedCode = useMemo(

@@ -5,8 +5,13 @@
     "scheme": "valeriascore",
     "version": "1.0.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0A0F1E",
     "icon": "./assets/icon.png",
+    "runtimeVersion": "1.0.0",
+    "updates": {
+      "url": "https://u.expo.dev/65d3d590-35be-49f3-9faa-0440a3851d62"
+    },
     "splash": {
       "image": "./assets/icon.png",
       "resizeMode": "contain",
@@ -25,7 +30,8 @@
             "buildToolsVersion": "36.0.0"
           }
         }
-      ]
+      ],
+      "@sentry/react-native"
     ],
     "experiments": {
       "typedRoutes": true
@@ -35,7 +41,6 @@
     ],
     "android": {
       "package": "com.fochizzy87.valeriascore",
-      "versionCode": 1,
       "icon": "./assets/icon.png",
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",

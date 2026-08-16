@@ -12,6 +12,8 @@ import {
 } from 'react-native'
 import { router } from 'expo-router'
 import { useFocusEffect } from '@react-navigation/native'
+import { MaterialCommunityIcons } from '@expo/vector-icons'
+import JoinQrModal from '../components/JoinQrModal'
 import { copyJoinCodeWithFeedback } from '../lib/copy-join-code-client'
 import { logoutAndClearActiveSessionState } from '../lib/logout'
 import { supabase } from '../lib/supabase'
@@ -94,6 +96,7 @@ export default function CreateSessionScreen() {
   const [pendingExpectedPlayers, setPendingExpectedPlayers] =
     useState<ExpectedPlayerOption | null>(null)
   const [loggingOut, setLoggingOut] = useState(false)
+  const [qrJoinCode, setQrJoinCode] = useState<string | null>(null)
   const didFocusRefreshRef = useRef(false)
 
   const loadSessions = useCallback(async () => {
@@ -548,6 +551,24 @@ export default function CreateSessionScreen() {
                         {featuredSession.join_code || 'No Code'}
                       </Text>
                     </Pressable>
+
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.qrChip,
+                        pressed && styles.pressed,
+                        !featuredSession.join_code && styles.disabled,
+                      ]}
+                      onPress={() => setQrJoinCode(featuredSession.join_code)}
+                      disabled={!featuredSession.join_code}
+                      accessibilityRole="button"
+                      accessibilityLabel="Show join QR code"
+                    >
+                      <MaterialCommunityIcons
+                        name="qrcode"
+                        size={26}
+                        color={theme.colors.accent}
+                      />
+                    </Pressable>
                   </View>
                 </View>
 
@@ -770,6 +791,12 @@ export default function CreateSessionScreen() {
           </View>
         </ScrollView>
       </View>
+
+      <JoinQrModal
+        visible={qrJoinCode !== null}
+        joinCode={qrJoinCode}
+        onClose={() => setQrJoinCode(null)}
+      />
     </ImageBackground>
   )
 }
@@ -903,6 +930,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '900',
     letterSpacing: 0.8,
+  },
+
+  qrChip: {
+    marginLeft: 8,
+    backgroundColor: pageSurface.inset,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSoft,
+    minWidth: 56,
+    minHeight: 56,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   ribbonRow: {
