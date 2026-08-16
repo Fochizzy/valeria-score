@@ -537,6 +537,16 @@ export default function VictoryScreen() {
             </View>
           ) : null}
 
+          {!loading && !loadError && finalScores.some((entry) => entry.isGuest) ? (
+            <View style={styles.guestClaimCard}>
+              <Text style={styles.guestClaimTitle}>Played as a guest?</Text>
+              <Text style={styles.guestClaimBody}>
+                Create an account and claim your guest Player ID to keep these
+                stats — the option is on the Create User screen.
+              </Text>
+            </View>
+          ) : null}
+
           {!loading && !loadError ? (
             <Animated.View style={[styles.inlineButtons, { opacity: buttonsAnim }]}>
               <Pressable
@@ -571,6 +581,28 @@ export default function VictoryScreen() {
 }
 
 const styles = StyleSheet.create({
+  guestClaimCard: {
+    backgroundColor: 'rgba(123, 92, 255, 0.12)',
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSoft,
+    padding: theme.spacing.lg,
+    marginBottom: theme.spacing.md,
+  },
+
+  guestClaimTitle: {
+    color: theme.colors.primaryLight,
+    fontSize: 13,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+
+  guestClaimBody: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+
   pageBackground: {
     flex: 1,
     backgroundColor: theme.colors.background,

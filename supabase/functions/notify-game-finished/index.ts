@@ -70,7 +70,7 @@ Deno.serve(async (req) => {
 
     const { data: seatRows, error: seatError } = await admin
       .from('session_scores')
-      .select('owner_user_id, scored_by_user_id')
+      .select('owner_user_id, scored_by_user_id, game_locked')
       .eq('session_id', sessionId)
 
     if (seatError) {
@@ -87,6 +87,30 @@ Deno.serve(async (req) => {
 
     if (!callerIsParticipant) {
       return jsonResponse({ error: 'Not a participant of this session' }, 403)
+    }
+
+    // The game must actually be finished before anyone can push about it.
+    const gameIsFinished = (seatRows ?? []).some((row) => row.game_locked)
+
+    if (!gameIsFinished) {
+      return jsonResponse({ error: 'Game is not finished' }, 409)
+    }
+
+    // Idempotency: the first caller claims notified_at atomically; every
+    // repeat call (double-tap, direct endpoint hit) becomes a no-op.
+    const { data: claimed, error: claimError } = await admin
+      .from('game_sessions')
+      .update({ notified_at: new Date().toISOString() })
+      .eq('id', sessionId)
+      .is('notified_at', null)
+      .select('id')
+
+    if (claimError) {
+      return jsonResponse({ error: claimError.message }, 500)
+    }
+
+    if (!claimed || claimed.length === 0) {
+      return jsonResponse({ sent: 0, alreadyNotified: true }, 200)
     }
 
     const recipients = selectRecipientUserIds(

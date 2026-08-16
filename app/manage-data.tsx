@@ -115,6 +115,7 @@ export default function ManageDataScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [working, setWorking] = useState(false)
   const [exportingCsv, setExportingCsv] = useState(false)
+  const [visibleHistoryCount, setVisibleHistoryCount] = useState(20)
   const [guestProfiles, setGuestProfiles] = useState<GuestProfileRow[]>([])
   const [completedSessions, setCompletedSessions] = useState<SessionRow[]>([])
   const [soloResults, setSoloResults] = useState<SoloGameResultRow[]>([])
@@ -857,7 +858,7 @@ export default function ManageDataScreen() {
                     </Text>
                   </View>
                 ) : (
-                  historyItems.map((item) => {
+                  historyItems.slice(0, visibleHistoryCount).map((item) => {
                     const copy = buildHistoryCardCopy(item)
                     const pressKey = `${item.kind}:${item.id}`
 
@@ -896,6 +897,22 @@ export default function ManageDataScreen() {
                     )
                   })
                 )}
+
+                {historyItems.length > visibleHistoryCount ? (
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.showMoreButton,
+                      pressed && styles.buttonPressed,
+                    ]}
+                    onPress={() => setVisibleHistoryCount((count) => count + 20)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Show more completed games"
+                  >
+                    <Text style={styles.showMoreButtonText}>
+                      Show more ({historyItems.length - visibleHistoryCount} remaining)
+                    </Text>
+                  </Pressable>
+                ) : null}
               </View>
 
                 <View style={[styles.sectionCard, styles.dangerCard]}>
@@ -1203,6 +1220,22 @@ const styles = StyleSheet.create({
     color: theme.colors.accent,
     fontSize: 13,
     fontWeight: '900',
+  },
+
+  showMoreButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.surfaceRaised,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSoft,
+    paddingVertical: 10,
+    marginTop: 10,
+  },
+
+  showMoreButtonText: {
+    color: theme.colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '800',
   },
 
   emptyTitle: {
