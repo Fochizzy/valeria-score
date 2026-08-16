@@ -15,6 +15,7 @@ import { initMonitoring, setMonitoringUser, wrapRootComponent } from '../lib/mon
 import {
   configureNotificationHandling,
   extractVictoryRouteFromNotification,
+  pushNotificationsSupported,
   registerPushTokenForCurrentUser,
 } from '../lib/notifications'
 import { supabase } from '../lib/supabase'
@@ -95,6 +96,8 @@ function Layout() {
 
   // Tapping a "game finished" push lands the player on that game's recap.
   useEffect(() => {
+    if (!pushNotificationsSupported) return
+
     function routeFromNotificationData(data: Record<string, unknown> | undefined) {
       const target = extractVictoryRouteFromNotification(data)
 

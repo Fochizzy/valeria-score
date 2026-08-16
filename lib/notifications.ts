@@ -7,10 +7,18 @@ import { supabase } from './supabase'
 let registeredThisRun = false
 
 /**
+ * Push notifications are a native-only feature; the web build must never
+ * touch expo-notifications APIs (several throw "not available on web").
+ */
+export const pushNotificationsSupported = Platform.OS !== 'web'
+
+/**
  * Show pushes as banners while the app is foregrounded. Realtime already
  * updates open screens, so foreground pushes stay quiet (no sound/badge).
  */
 export function configureNotificationHandling() {
+  if (!pushNotificationsSupported) return
+
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowBanner: true,
@@ -28,7 +36,7 @@ export function configureNotificationHandling() {
  * denied) so it can never disturb the scoring flow.
  */
 export async function registerPushTokenForCurrentUser(): Promise<void> {
-  if (registeredThisRun || Platform.OS === 'web') {
+  if (registeredThisRun || !pushNotificationsSupported) {
     return
   }
 
