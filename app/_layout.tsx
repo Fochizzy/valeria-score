@@ -223,5 +223,20 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.background,
+    // On web, phone-first screens smear across desktop widths. Constrain the
+    // whole app (screens + bottom nav) to a centered column; the dark body
+    // background from app/+html.tsx fills the sides. Web also gets a little
+    // top padding since there are no safe-area insets there.
+    ...(Platform.OS === 'web'
+      ? {
+          width: '100%' as const,
+          maxWidth: 680,
+          alignSelf: 'center' as const,
+          paddingTop: 16,
+          // react-native-web renders ImageBackground images at natural size;
+          // clip the overflow so backdrop art can't spill past the column.
+          overflow: 'hidden' as const,
+        }
+      : null),
   },
 })

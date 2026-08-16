@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from 'react'
+import { type ComponentProps, useEffect, useLayoutEffect, useState } from 'react'
 import {
   ActivityIndicator,
   Image,
@@ -8,6 +8,7 @@ import {
   View,
 } from 'react-native'
 import { router, useNavigation } from 'expo-router'
+import { MaterialCommunityIcons } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { ensureProfileRow, getMyProfile } from '../lib/profile'
@@ -15,6 +16,28 @@ import { discardCurrentTrackedRoute } from '../lib/route-history'
 import { theme } from '../constants/theme'
 
 const logo = require('../assets/valeria_logo.png')
+
+const FEATURES: readonly {
+  icon: ComponentProps<typeof MaterialCommunityIcons>['name']
+  title: string
+  body: string
+}[] = [
+  {
+    icon: 'sync',
+    title: 'Live Tables',
+    body: 'Everyone scores their own seat, synced in real time.',
+  },
+  {
+    icon: 'crown-outline',
+    title: 'Duke Stats',
+    body: 'Win rates and trends for every duke you play.',
+  },
+  {
+    icon: 'sword-cross',
+    title: 'Solo Mode',
+    body: 'Track battles against the Dark Lord too.',
+  },
+] as const
 
 export default function IndexScreen() {
   const navigation = useNavigation()
@@ -110,6 +133,24 @@ export default function IndexScreen() {
             <Text style={styles.secondaryButtonText}>Create User</Text>
           </Pressable>
         </View>
+
+        <View style={styles.featureRow}>
+          {FEATURES.map((feature) => (
+            <View key={feature.title} style={styles.featureCard}>
+              <MaterialCommunityIcons
+                name={feature.icon}
+                size={20}
+                color={theme.colors.primaryLight}
+              />
+              <Text style={styles.featureTitle}>{feature.title}</Text>
+              <Text style={styles.featureBody}>{feature.body}</Text>
+            </View>
+          ))}
+        </View>
+
+        <Text style={styles.footerText}>
+          A fan-made companion for Valeria: Card Kingdoms
+        </Text>
       </View>
     </SafeAreaView>
   )
@@ -172,6 +213,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: theme.colors.text,
+    fontFamily: theme.fonts.display,
     fontSize: 30,
     fontWeight: '900',
     textAlign: 'center',
@@ -219,5 +261,35 @@ const styles = StyleSheet.create({
   pressed: {
     transform: [{ scale: 0.985 }],
     opacity: 0.94,
+  },
+  featureRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  featureCard: {
+    flex: 1,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 12,
+    gap: 4,
+  },
+  featureTitle: {
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  featureBody: {
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  footerText: {
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 16,
   },
 })

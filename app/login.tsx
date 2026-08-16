@@ -35,6 +35,7 @@ import { ensureProfileRow, getMyProfile } from '../lib/profile'
 import {
   loadRememberedCredentials as loadStoredRememberedCredentials,
   persistRememberedCredentials,
+  REMEMBERED_PASSWORD_KEY,
 } from '../lib/remembered-credentials'
 import { supabase } from '../lib/supabase'
 
@@ -46,11 +47,27 @@ const DISPLAY_FONT = Platform.select({
   default: 'serif',
 })
 
-const secureCredentialStore = {
-  getItem: SecureStore.getItemAsync,
-  setItem: SecureStore.setItemAsync,
-  removeItem: SecureStore.deleteItemAsync,
-}
+// expo-secure-store has no web implementation. On web, remember the email
+// only via AsyncStorage (localStorage) and never persist the password —
+// the browser's own password manager handles that side.
+const secureCredentialStore =
+  Platform.OS === 'web'
+    ? {
+        getItem: (key: string) =>
+          key === REMEMBERED_PASSWORD_KEY
+            ? Promise.resolve(null)
+            : AsyncStorage.getItem(key),
+        setItem: async (key: string, value: string) => {
+          if (key === REMEMBERED_PASSWORD_KEY) return
+          await AsyncStorage.setItem(key, value)
+        },
+        removeItem: (key: string) => AsyncStorage.removeItem(key),
+      }
+    : {
+        getItem: SecureStore.getItemAsync,
+        setItem: SecureStore.setItemAsync,
+        removeItem: SecureStore.deleteItemAsync,
+      }
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('')
@@ -152,7 +169,13 @@ export default function LoginScreen() {
 
       if (error) throw error
 
-      await persistRememberMe(rememberMe, safeEmail, password)
+      // A credential-storage hiccup must never fail an already-successful
+      // sign-in (this aborted web logins before secure-store was guarded).
+      try {
+        await persistRememberMe(rememberMe, safeEmail, password)
+      } catch (persistError) {
+        console.error('Failed to persist remembered credentials', persistError)
+      }
 
       await ensureProfileRow()
 
@@ -289,6 +312,7 @@ export default function LoginScreen() {
                       onFocus={() => scrollFieldIntoView('email')}
                       autoCapitalize="none"
                       autoCorrect={false}
+                      autoComplete="email"
                       keyboardType="email-address"
                       placeholder="you@example.com"
                       placeholderTextColor="#A79BC9"
@@ -306,6 +330,7 @@ export default function LoginScreen() {
                       secureTextEntry={!passwordVisible}
                       autoCapitalize="none"
                       autoCorrect={false}
+                      autoComplete="current-password"
                       placeholder="Password"
                       placeholderTextColor="#A79BC9"
                       style={[styles.input, styles.passwordInput]}

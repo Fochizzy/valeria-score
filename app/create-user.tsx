@@ -374,6 +374,8 @@ const styles = StyleSheet.create({
     color: theme.colors.primaryLight,
     fontSize: 13,
     fontWeight: '900',
+    textDecorationLine: 'underline',
+    paddingVertical: 6,
   },
   claimSection: {
     backgroundColor: 'rgba(123, 92, 255, 0.10)',

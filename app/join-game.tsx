@@ -113,6 +113,10 @@ export default function JoinGameScreen() {
               onSubmitEditing={handleJoin}
             />
 
+            <Text style={styles.qrHint}>
+              Got a table QR code? Scan it with your camera to join instantly.
+            </Text>
+
             <View style={styles.buttonRow}>
               <Pressable
                 style={[styles.secondaryButton]}
@@ -125,12 +129,18 @@ export default function JoinGameScreen() {
               <Pressable
                 style={[
                   styles.primaryButton,
-                  (loading || normalizedCode.length !== 6) && styles.buttonDisabled,
+                  (loading || normalizedCode.length !== 6) && styles.primaryButtonDisabled,
                 ]}
                 onPress={handleJoin}
                 disabled={loading || normalizedCode.length !== 6}
               >
-                <Text style={styles.primaryButtonText}>
+                <Text
+                  style={[
+                    styles.primaryButtonText,
+                    (loading || normalizedCode.length !== 6) &&
+                      styles.primaryButtonTextDisabled,
+                  ]}
+                >
                   {loading ? 'Joining...' : 'Join Game'}
                 </Text>
               </Pressable>
@@ -216,6 +226,14 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     textAlign: 'center',
   },
+  qrHint: {
+    color: '#A493C8',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+
   buttonRow: {
     marginTop: 12,
     flexDirection: 'row',
@@ -251,5 +269,17 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: {
     opacity: 0.5,
+  },
+
+  // Ghost treatment while the code is incomplete: a washed-out primary at
+  // full width dominated the screen and read as broken.
+  primaryButtonDisabled: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: '#3C3054',
+  },
+
+  primaryButtonTextDisabled: {
+    color: '#8E7FA8',
   },
 })

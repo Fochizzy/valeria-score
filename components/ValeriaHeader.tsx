@@ -113,6 +113,7 @@ const styles = StyleSheet.create({
 
   title: {
     color: theme.colors.text,
+    fontFamily: theme.fonts.display,
     fontSize: 24,
     fontWeight: '900',
     marginBottom: 2,

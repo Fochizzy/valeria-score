@@ -1,4 +1,16 @@
+import { Platform } from 'react-native'
+
 export const theme = {
+  fonts: {
+    // Display serif for hero titles, matching the login screen's wordmark
+    // treatment. System fonts only — no bundled font files to load.
+    display: Platform.select({
+      ios: 'Georgia',
+      android: 'serif',
+      default: "Georgia, 'Times New Roman', serif",
+    }),
+  },
+
   colors: {
     background: '#0A0F1E',
     backgroundAlt: '#12182B',
