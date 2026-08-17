@@ -36,6 +36,7 @@ yarn-error.*
 .env.*
 !.env.example
 credentials.json
+play-service-account.json
 
 # typescript
 *.tsbuildinfo

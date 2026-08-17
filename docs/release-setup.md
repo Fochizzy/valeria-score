@@ -43,6 +43,70 @@ after FCM credentials exist:
 4. Rebuild. Until then, token registration fails silently and nothing else
    is affected.
 
+## Play Store autopublish — needs a service account JSON
+
+`eas.json` already has the submit profiles and `package.json` the scripts. The
+one missing piece is a Google Play service account key, which only you can
+create — it is a private credential tied to your Google account.
+
+1. **Google Cloud Console → IAM & Admin → Service Accounts** (use any project;
+   create one if you have none). **Create service account**, name it something
+   like `play-publisher`, **Create and continue**, then **Done**. No project
+   roles are needed — Play Console grants the permissions, not IAM.
+2. On the new account's row: **⋮ → Manage keys → Add key → Create new key →
+   JSON → Create**. The file downloads immediately and is the only copy Google
+   will ever give you. Save it as `play-service-account.json` in the repo root
+   (gitignored, and excluded from EAS uploads).
+3. **Enable the Google Play Android Developer API** for that same Cloud
+   project: <https://console.cloud.google.com/apis/library/androidpublisher.googleapis.com>
+   → **Enable**. Skipping this is the most common failure.
+4. **Play Console → Users and permissions → Invite new user**. Paste the
+   service account's email (`…@….iam.gserviceaccount.com`), and under **App
+   permissions** add **Valeria Score** with *View app information*, *Edit and
+   delete draft apps*, *Release to production, exclude devices, and use Play
+   App Signing*, *Release apps to testing tracks*, *Manage testing tracks and
+   edit tester lists*, and *Manage store presence*. **Invite user**.
+
+Then confirm it actually works before spending a build on it:
+
+```
+npm run check:play-creds
+```
+
+That signs a JWT with the key, exchanges it for a token, and opens/discards a
+throwaway Play edit — so a pass means the key, the API, and the Play Console
+permissions are all genuinely in place. Each failure mode maps back to the
+numbered step above. Add `-- --offline` to check only the file's shape.
+
+Publishing:
+
+```
+npm run publish:android              # build + submit to the internal track
+npm run submit:android               # submit the latest existing build (no rebuild)
+npm run publish:android:production   # build + submit to production — see below
+```
+
+Three caveats:
+
+- **The production track is not open to this app yet.** As of the Play Console
+  state on 2026-08-16, Valeria Scoring has Production `Inactive` and Google
+  gates production access behind completing a qualifying closed test. Closed
+  testing (2 tracks) and internal testing are both Active. So
+  `publish:android:production` will be rejected until you finish the closed
+  test and are approved — `publish:android` (internal) is the working path
+  until then.
+- **The first release on any track has to be manual.** Google's API cannot
+  create a listing that has never had an AAB uploaded through the Play Console
+  UI. Not a problem here — the app is already published to test tracks — but
+  it applies to any new app.
+- **Publishing runs from this machine, not CI.** The `production` build profile
+  uses `credentialsSource: "local"`, so signing reads `credentials.json` and
+  the keystore at `android/app/valeria-upload-key.jks` — neither is in git. To
+  move this into GitHub Actions you would first switch the profile to
+  `"remote"` and upload the keystore once via `eas credentials -p android`,
+  then store `EXPO_TOKEN` plus the key JSON as repository secrets and point
+  `GOOGLE_SERVICE_ACCOUNT_KEY_PATH` at the file the workflow writes.
+
 ## OTA updates (EAS Update) — ready now
 
 Builds are pinned to `runtimeVersion` `1.0.0` with channels

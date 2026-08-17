@@ -33,13 +33,17 @@ from `app.json`, so config changes belong there, not in native files.
 ## Builds and releases
 
 ```bash
+npm run publish:android            # build + submit to the Play internal track
 npm run build:android:production   # EAS cloud build -> Play AAB
 npm run build:android:apk         # internal-distribution APK
 eas update --channel production   # ship a JS-only fix over the air
 ```
 
-Release credentials, push-notification setup (Sentry, FCM), and the OTA
-runtime-version rules live in [docs/release-setup.md](docs/release-setup.md).
+Publishing needs a Google Play service account key at
+`play-service-account.json`; `npm run check:play-creds` verifies it against the
+Play API. Release credentials, push-notification setup (Sentry, FCM), and the
+OTA runtime-version rules live in
+[docs/release-setup.md](docs/release-setup.md).
 
 ## Backend
 
