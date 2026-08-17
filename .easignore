@@ -35,6 +35,10 @@ yarn-error.*
 .env.*
 !.env.example
 
+# Play publishing key — read by the EAS CLI on this machine, never needed by
+# (and never uploaded to) the build worker.
+play-service-account.json
+
 # typescript
 *.tsbuildinfo
 
