@@ -1,4 +1,4 @@
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { router } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
@@ -13,6 +13,8 @@ import {
 } from '../lib/about-content'
 import { performSafeBackNavigation } from '../lib/back-navigation'
 import { getTrackedPreviousRoute, markTrackedBackNavigation } from '../lib/route-history'
+
+const builderPhoto = require('../assets/izzy.jpg')
 
 export default function AboutScreen() {
   const insets = useSafeAreaInsets()
@@ -52,8 +54,18 @@ export default function AboutScreen() {
       </View>
 
       <View style={styles.bylineCard}>
-        <Text style={styles.bylineLabel}>Credits</Text>
-        <Text style={styles.byline}>{ABOUT_BYLINE}</Text>
+        <Image
+          source={builderPhoto}
+          style={styles.bylinePhoto}
+          resizeMode="cover"
+          accessible
+          accessibilityLabel={ABOUT_BYLINE}
+        />
+
+        <View style={styles.bylineCopy}>
+          <Text style={styles.bylineLabel}>Credits</Text>
+          <Text style={styles.byline}>{ABOUT_BYLINE}</Text>
+        </View>
       </View>
 
       <Pressable
@@ -103,12 +115,27 @@ const styles = StyleSheet.create({
 
   bylineCard: {
     marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: theme.colors.surfaceAlt,
     borderRadius: theme.radius.xl,
     borderWidth: 1,
     borderColor: theme.colors.border,
     paddingHorizontal: 18,
     paddingVertical: 16,
+    gap: 14,
+  },
+
+  bylinePhoto: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSoft,
+  },
+
+  bylineCopy: {
+    flex: 1,
     gap: 4,
   },
 
