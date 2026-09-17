@@ -269,6 +269,10 @@ export default function CompareScreen() {
     router.push('/manage-data')
   }, [])
 
+  const goToAbout = useCallback(() => {
+    router.push('/about')
+  }, [])
+
   const addGuest = useCallback(() => {
     if (!effectiveSessionId) {
       Alert.alert('Missing session', 'Start or join a session before adding a guest.')
@@ -724,6 +728,8 @@ export default function CompareScreen() {
             return { ...action, onPress: goToManageData }
           case 'newSession':
             return { ...action, onPress: handleCreateSession }
+          case 'about':
+            return { ...action, onPress: goToAbout }
           case 'logout':
             return { ...action, onPress: handleLogout }
           case 'deleteSession':
@@ -736,6 +742,7 @@ export default function CompareScreen() {
       }),
     [
       deleteSession,
+      goToAbout,
       goToManageData,
       handleCreateSession,
       handleLogout,

@@ -386,6 +386,11 @@ export default function ProfileScreen() {
             ...action,
             onPress: () => router.replace('/create-session'),
           }
+        case 'about':
+          return {
+            ...action,
+            onPress: () => router.push('/about'),
+          }
         case 'logout':
           return { ...action, onPress: handleLogout }
         case 'deleteSession':

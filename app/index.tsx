@@ -148,9 +148,18 @@ export default function IndexScreen() {
           ))}
         </View>
 
-        <Text style={styles.footerText}>
-          A fan-made companion for Valeria: Card Kingdoms
-        </Text>
+        <Pressable
+          style={({ pressed }) => [styles.footerLink, pressed && styles.pressed]}
+          onPress={() => router.push('/about')}
+          accessibilityRole="link"
+          accessibilityLabel="About Valeria Scoring"
+          hitSlop={8}
+        >
+          <Text style={styles.footerText}>
+            A fan-made companion for Valeria: Card Kingdoms
+          </Text>
+          <Text style={styles.footerLinkText}>About this app</Text>
+        </Pressable>
       </View>
     </SafeAreaView>
   )
@@ -286,10 +295,21 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 15,
   },
+  footerLink: {
+    marginTop: 16,
+    alignItems: 'center',
+    gap: 4,
+  },
   footerText: {
     color: theme.colors.textMuted,
     fontSize: 11,
     textAlign: 'center',
-    marginTop: 16,
+  },
+  footerLinkText: {
+    color: theme.colors.primaryLight,
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'center',
+    textDecorationLine: 'underline',
   },
 })

@@ -52,12 +52,13 @@ const pageSurface = {
 
 const GAME_HUB_LINKS: readonly {
   label: string
-  route: '/player-stats' | '/duke-stats' | '/manage-data' | '/solo-stats'
+  route: '/player-stats' | '/duke-stats' | '/manage-data' | '/solo-stats' | '/about'
 }[] = [
   { label: 'Player Stats', route: '/player-stats' as const },
   { label: 'Duke Stats', route: '/duke-stats' as const },
   { label: 'Recent Recaps', route: '/manage-data' as const },
   { label: 'Solo Stats', route: '/solo-stats' as const },
+  { label: 'About', route: '/about' as const },
 ] as const
 
 function formatDate(value: string) {

@@ -5,6 +5,7 @@ export type ManageAccountMenuActionId =
   | 'playerStatistics'
   | 'globalTrends'
   | 'soloStatistics'
+  | 'about'
   | 'logout'
   | 'deleteSession'
   | 'cancel'
@@ -29,6 +30,7 @@ export type BoundManageAccountMenuHandlers = {
   onPlayerStatistics?: () => void
   onGlobalTrends?: () => void
   onSoloStatistics?: () => void
+  onAbout?: () => void
 }
 
 export const manageAccountAlertCopy = Object.freeze({
@@ -63,6 +65,7 @@ export function buildManageAccountMenuActions(
     { id: 'playerStatistics', text: 'Player Statistics' },
     { id: 'globalTrends', text: 'Global Trends' },
     { id: 'soloStatistics', text: 'Solo Statistics' },
+    { id: 'about', text: 'About' },
   ]
 
   if (options.includeDeleteSession) {
@@ -112,6 +115,11 @@ export function buildBoundManageAccountMenuActions(
       case 'soloStatistics':
         if (handlers.onSoloStatistics) {
           actions.push({ ...action, onPress: handlers.onSoloStatistics })
+        }
+        break
+      case 'about':
+        if (handlers.onAbout) {
+          actions.push({ ...action, onPress: handlers.onAbout })
         }
         break
       case 'logout':

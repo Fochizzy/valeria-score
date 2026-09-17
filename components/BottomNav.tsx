@@ -234,6 +234,11 @@ export default function BottomNav() {
             router.push('/solo-stats' as never)
           })
         },
+        onAbout: () => {
+          void confirmScoreExitIfNeeded(() => {
+            router.push('/about')
+          })
+        },
         onLogout: () => {
           void confirmScoreExitIfNeeded(() => {
             void handleLogout()

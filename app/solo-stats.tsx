@@ -510,6 +510,7 @@ export default function SoloStatsScreen() {
         onPlayerStatistics: () => router.push('/player-stats'),
         onGlobalTrends: () => router.push('/global-trends'),
         onSoloStatistics: () => router.push('/solo-stats' as never),
+        onAbout: () => router.push('/about'),
         onLogout: () => {
           void handleLogout()
         },

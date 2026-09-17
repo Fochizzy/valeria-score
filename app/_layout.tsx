@@ -201,6 +201,7 @@ function Layout() {
             <Stack.Screen name="global-trends" />
             <Stack.Screen name="solo-stats" />
             <Stack.Screen name="manage-data" options={manageAccountSwipeBackScreenOptions} />
+            <Stack.Screen name="about" options={manageAccountSwipeBackScreenOptions} />
           </Stack>
 
           {showBottomNav ? <BottomNav /> : null}

@@ -11,6 +11,7 @@ const PATHS_WITHOUT_BOTTOM_NAV = [
   '/solo-victory-condition',
   '/victory',
   '/game-recap',
+  '/about',
 ]
 
 export function shouldShowBottomNav(pathname: string) {
