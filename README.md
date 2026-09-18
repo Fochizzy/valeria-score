@@ -1,7 +1,13 @@
 # Valeria Score
 
+![Valeria Score mobile application](Feature%20Image.png)
+
 A fan-made score keeper and campaign companion for **Valeria: Card Kingdoms**.
 Built with Expo (React Native) on a Supabase backend.
+
+This project demonstrates end-to-end product ownership: interaction design,
+realtime multiplayer state, offline-tolerant mobile behavior, database security,
+analytics, automated testing, and Android release operations.
 
 ## What it does
 
@@ -15,6 +21,23 @@ Built with Expo (React Native) on a Supabase backend.
 - **Guests** — seat players without accounts; they can claim their stats
   later by converting the guest Player ID into an account.
 - **History** — recaps of every finished game plus CSV export.
+
+## Product tour
+
+| Join a table | Score together | Learn from the results |
+| --- | --- | --- |
+| ![Valeria Score landing screen](app-store-screenshots/2026-04-26/01-landing-screen.png) | ![Valeria Score scoring screen](app-store-screenshots/2026-04-26/04-score-screen.png) | ![Valeria Score duke analytics](app-store-screenshots/2026-04-26/05-duke-stats.png) |
+
+## Engineering highlights
+
+- Supabase Auth, Postgres, row-level security, and edge functions keep account,
+  guest, and game data boundaries explicit.
+- Locked game recaps, idempotent completion notifications, and migration-drift
+  checks protect data integrity across retries and releases.
+- CI runs the test suite, TypeScript, ESLint, a static web export, and a check
+  that committed migrations match production history.
+- EAS build, submit, and over-the-air update workflows support repeatable Android
+  delivery without committing release credentials.
 
 ## Development
 
